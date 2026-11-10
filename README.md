@@ -2,9 +2,6 @@
 
 
 在日志、配置、埋点 JSON、固件产物和 pcap 里翻找被人忘掉的密钥、令牌和个人信息，然后告诉你它在哪一行、有多可信、该先处理哪一条。
-
-说白了就是个翻垃圾的。翻得比人细，也比人啰嗦。
-
 Python 3.10+，零第三方依赖。抓包解析需要系统里有 `tshark`（Wireshark 自带）；没装也能扫文本，只是 pcap 会被跳过。
 
 ## 跑起来
@@ -18,7 +15,6 @@ senscan app.log --no-report          # 只在终端看，不写文件
 senscan ui                           # 浏览器打开 http://127.0.0.1:8777
 ```
 
-不想安装就把 `senscan` 换成 `python -m senscan`，参数一样。工作台只监听本机，换端口用 `python -m senscan ui --port 9000 --no-browser`。
 
 | 参数 | 作用 |
 |---|---|
