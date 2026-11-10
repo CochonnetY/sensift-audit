@@ -9,10 +9,7 @@ Python 3.10+，零第三方依赖。抓包解析需要系统里有 `tshark`（Wi
 ```bash
 pip install -e .
 
-senscan ./logs -o reports
-senscan capture.pcap -o reports
-senscan app.log --no-report          # 只在终端看，不写文件
-senscan ui                           # 浏览器打开 http://127.0.0.1:8777
+python -m senscan ui                          # 浏览器打开 http://127.0.0.1:8777
 ```
 
 
