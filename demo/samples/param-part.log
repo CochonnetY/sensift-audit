@@ -1,0 +1,11 @@
+[36;22mI/IPC MAIN [2026-11-03 18:07:38.004] (main.c:904 main)>>>>>>>>>>>>>>>>> xos_aes_hw_crypto_init finished![0m
+[36;22mI/XOS_PARAM_PART_RW [2026-11-03 18:07:38.010] (xos_bind_param_rw_api.c:235 xos_bind_param_rw_read_param)buf:
+F0f8XMmdXGXgyraI5yGU262jQkvknTraWF39OH7qqvA6yh34ZSHMGVAMSL0YcD1ENs6o2F7GEbbUEZUDzKv5s/b8nFe1ZfAKZkWzAWFF9pD+IDzB8nMcRkD5W8ar1Y60dc4hx7iVQg
++CqBlyQ1BVggr8xUOOs2Uod4IViyiJ/ueqoMGHFK9MmBeVOQnseleTItIy8YNIQO2sDsd1SgYoyOoAxtJIs6Jg8
+"Factory","mode":"user","sn":"0|080200U6100006A","version":"1.0.0","PrivateKey":"AbCd9f
+==","PublicKey":"MEkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEERER
+EREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREREQ==","productModel":"","hw_version":"OD800PRO-
+MAIN-02A","macaddr":"AA0D800E8S0205","again_time":0,"cpKeySize":"164","productKey":"a1Zk9Qm2Xv7Bn4Lp8Tc","deviceName":"devGW0331Kb7Yt2Rs9Qm","dev
+Secret":"Kd8sVn2Lq9Zx4Wp7Rm3Bt6Yc1Fh5Nj","region":"CN","userId":"1374012"
+[0m
+[36;22mI/XOS_PARAM_PART_RW [2026-11-03 18:07:38.012] (xos_bind_param_rw_api.c:42 xos_bind_param_rw_parse_param_json)is: 0|080200U6100006A[0m

@@ -1,0 +1,12 @@
+INSERT INTO t (id) VALUES (1); PK=12345678, DN=row_0001, DS=shard01
+bind DN=cn=admin,dc=corp,dc=com DS=directory_service
+mount DS=/dev/sda1 PK=/usr/local/bin
+device_secret: your_device_secret_here
+product_key: XXXXXXXXXXXXXXXXXXXX
+streamsdk version: 1.7.0.1_81184cda_20261022
+stacksize:524288
+region: CN
+domain_name:
+SELECT user_id AS customer_identifier FROM t
+[iot watchdog] AS=alias_name_value_here SK=sort_key_order_value
+boot: DS=isolated_value_without_any_triplet_context

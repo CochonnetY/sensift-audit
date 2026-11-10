@@ -1,0 +1,12 @@
+2026-11-09 10:00:00 INFO  [dbg] request_id=9b2e4c7a-3d18-4f6b-a2c9-7e1f5b8d0a34 trace=ok
+2026-11-09 10:00:01 INFO  [git] commit=3f8a9b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90
+2026-11-09 10:00:02 INFO  [perf] elapsed=1699512345678 ms
+2026-11-09 10:00:03 INFO  [net] peer=2001:0db8:85a3:0000:0000:8a2e:0370:7334
+2026-11-09 10:00:04 DEBUG [cfg] mac=ff:ff:ff:ff:ff:ff broadcast dst
+2026-11-09 10:00:05 DEBUG [cfg] token=example-token-for-docs
+2026-11-09 10:00:06 DEBUG [cfg] password=********
+2026-11-09 10:00:07 INFO  [dbg] device_sn=000000000000000
+2026-11-09 10:00:08 INFO  [build] sha1=da39a3ee5e6b4b0d3255bfef95601890afd80709
+2026-11-09 10:00:09 INFO  [dbg] order_no=20261109000123456 amount=19900
+2026-11-09 10:00:10 INFO  [dbg] retry backoff 00:00:05, 00:00:10
+2026-11-09 10:00:11 INFO  [dbg] version 1.2.3 build 2026110901

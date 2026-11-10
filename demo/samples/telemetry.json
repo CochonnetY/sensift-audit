@@ -1,0 +1,3 @@
+{"event": "app_launch", "ts": 1762534000, "device": {"imei": "861234567890127", "oaid": "5f8c1e2a-9b3d-4c7e-8f10-2a6b9d4e7c31", "os": "Android 14", "model": "Pixel 8"}, "session": {"session_id": "d41f9a2c7b3e8560"}}
+{"event": "ad_impression", "ts": 1762534012, "ad": {"idfa": "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D", "placement": "splash"}}
+{"event": "upload", "ts": 1762534030, "http": {"url": "https://corp-assets.oss-cn-hangzhou.aliyuncs.com/2026/11/a.mp4?OSSAccessKeyId=LTAI5tAbCdEfGhIjKlMn&Expires=1762500000&Signature=xJ3k%2B9Qz", "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI4NjEyMzQ1Njc4OTAxMjMiLCJkZXZpY2UiOiJhbmRyb2lkIiwiaWF0IjoxNzYyNTM0MDAwfQ.9mZ3kQx7bT2pLwR8sVnA4cYdH1jK6eUf"}}

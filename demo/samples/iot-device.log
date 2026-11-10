@@ -1,0 +1,13 @@
+Device info loaded from config_managerproduct_key: a1Zk9Qm2Xv7Bn4Lp8Tc, device_name: devGW0331Kb7Yt2Rs9Qm, device_secret: Kd8sVn2Lq9Zx4Wp7Rm3Bt6Yc1Fh5Nj, domain_name: , region: CN
+=========================================demo start ========================================
+===========streamsdk version: 1.7.0.1_81184cda_20261022 ===========
+device_msg->product_key: a1Zk9Qm2Xv7Bn4Lp8Tc
+device_msg->device_name: devGW0331Kb7Yt2Rs9Qm
+device_msg->device_secret: Kd8sVn2Lq9Zx4Wp7Rm3Bt6Yc1Fh5Nj
+device_msg->domain_name:
+device_msg->region: CN
+Using device triplet: PK=a1Zk9Qm2Xv7Bn4Lp8Tc, DN=devGW0331Kb7Yt2Rs9Qm, DS=Kd8sVn2Lq9Zx4Wp7Rm3Bt6Yc1Fh5Nj
+[36;22mI/XOS_IOT_SDK      [1970-01-01 01:16:17.904] (xos_iot_device.c:31 setMasterDeviceInfo)set master device info ,device name:devGW0331Kb7Yt2Rs9Qm
+[0m
+stacksize:524288
+stacksize:524288

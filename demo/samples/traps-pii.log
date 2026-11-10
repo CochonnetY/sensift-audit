@@ -1,0 +1,17 @@
+# PII 误报陷阱：以下都不应命中或应被压制
+user login trace order_no=13812340000123 trace_id=8f9a2b3c
+mobile=13800138000
+mobile=13900000000
+idcard=110105194912310021
+card_no=6222020000000000
+card=1234567890123456
+email=user@example.com
+logo@2x.png icon@3x.png sprite@2x.png
+password=********
+token=REDACTED
+api_key=YOUR_API_KEY_HERE
+jdbc:mysql://10.0.0.1:3306/app?password=changeme
+mysql://root:password@localhost:3306/test
+authorization: Basic dXNlcjpwYXNzd29yZA==
+authorization: Basic eW91cmlkOnBhc3N3b3Jk
+session_key=EXAMPLE_SESSION_KEY_PLACEHOLDER

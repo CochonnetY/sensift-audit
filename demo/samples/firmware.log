@@ -1,0 +1,10 @@
+[    0.000000] Booting Linux 5.15.0 on arm64
+[    0.842311] usb 1-1: new high-speed USB device number 2
+[    2.341902] keyring: loading device key
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA3sT9pQ7xK2mNvR8bY1cLdF4hJ6gA0eWzS5uPoI3rT7yUvX9b
+-----END RSA PRIVATE KEY-----
+[    3.112004] tls: pinned cert fingerprint sha256 4a:1f:9c:3d:7e:22:88:bb:01:f4:6d:9a:2c:5e:70:13:9f:a8:41:6b:d2:8e:37:c5:0a:94:5f:be:26:7d:18:e3
+[    4.500881] storage: mounted /data, 128MB free
+[    5.008332] cfg: device api_key = LTAI5tAbCdEfGhIjKlMn
+[    6.220145] ota: check version 2026.11.08

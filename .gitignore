@@ -1,0 +1,29 @@
+# Python 产物
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# 本地会话与工作台数据（memory、一次性 token、临时脚本）——禁止入库
+.workbuddy/
+
+# 扫描产物：默认不脱敏，可能含明文凭据与真实日志，绝不入库
+senscan-reports/
+demo/report/
+demo/out-pcap/
+*.jsonl
+
+# saas.log 是 make_demo_v2.py 的生成产物，含形似真实凭据的合成 token；
+# 公开仓库会触发 GitHub Push Protection（GH013），故不入库，由脚本本地生成。
+demo/samples/saas.log
+
+# 演示截图（文档未引用）
+demo/*.png
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+*.swp

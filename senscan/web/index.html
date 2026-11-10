@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>senscan · 敏感实体审计工作台</title>
+<style>
+:root{
+  --bg:#f3f5f9;--card:#fff;--line:#e5e9f0;--line2:#eef1f6;
+  --ink:#172033;--ink2:#3c475c;--muted:#77829a;--faint:#a3adbf;
+  --primary:#2f5fe0;--primary-soft:#eaf0ff;
+  --red:#d92d20;--red-soft:#fdeceb;--orange:#e07b16;--orange-soft:#fff3e3;
+  --blue:#0b83c4;--blue-soft:#e7f5fd;--green:#16835c;--green-soft:#e7f7ef;
+  --purple:#6d4bd6;--shadow:0 1px 2px rgba(20,32,60,.04),0 8px 24px rgba(20,32,60,.05);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font-family:inherit;color:inherit}
+button{cursor:pointer}
+a{color:var(--primary);text-decoration:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.dim{color:var(--muted)}
+.tiny{font-size:11.5px}
+.hide{display:none!important}
+
+.topbar{height:60px;background:#fff;border-bottom:1px solid var(--line);display:flex;
+  align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-.2px}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#2f5fe0,#5b8def);
+  color:#fff;display:grid;place-items:center;font-size:15px;font-weight:400}
+.brand .tag{font-size:11.5px;font-weight:500;color:var(--muted);background:#f2f4f8;
+  padding:2px 8px;border-radius:5px;margin-left:2px}
+.topmeta{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px}
+.pill{border:1px solid var(--line);border-radius:20px;padding:3px 10px;background:#fafbfd}
+.pill.ok{color:var(--green);border-color:#bfe6d3;background:var(--green-soft)}
+.pill.warn{color:var(--orange);border-color:#f4dcb5;background:var(--orange-soft)}
+
+.layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:18px;padding:18px;
+  max-width:1800px;margin:0 auto;align-items:start}
+.side{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);
+  padding:18px;position:sticky;top:78px;max-height:calc(100vh - 96px);overflow:auto}
+.side h3{font-size:12px;font-weight:700;color:var(--ink2);letter-spacing:.3px;
+  display:flex;align-items:center;gap:8px;margin:20px 0 10px}
+.side h3:first-child{margin-top:0}
+.side h3 .n{width:18px;height:18px;border-radius:5px;background:var(--primary-soft);
+  color:var(--primary);font-size:10.5px;display:grid;place-items:center;font-weight:700}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+textarea,input[type=text],input[type=number],select{width:100%;border:1px solid var(--line);
+  border-radius:8px;padding:8px 10px;font-size:12.5px;background:#fcfdff;outline:none;transition:.15s}
+textarea:focus,input:focus,select:focus{border-color:#9ab6f5;box-shadow:0 0 0 3px #eef3ff;background:#fff}
+textarea{resize:vertical;min-height:64px;line-height:1.55}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{flex:1}
+.btn{border:1px solid var(--line);background:#fff;color:var(--ink2);border-radius:8px;
+  padding:7px 12px;font-size:12.5px;transition:.15s;white-space:nowrap}
+.btn:hover{border-color:#bcc9e0;background:#fafbff}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+.btn.primary:hover{background:#2550c4}
+.btn.sm{padding:5px 9px;font-size:11.5px}
+.btn.ghost{border-style:dashed;color:var(--muted)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.checks{display:grid;gap:7px}
+.chk{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--ink2);cursor:pointer}
+.chk input{margin-top:3px;accent-color:var(--primary);flex:none}
+.chk .hint{display:block;font-size:11px;color:var(--faint);line-height:1.45}
+.slider{display:flex;align-items:center;gap:10px}
+.slider input[type=range]{flex:1;accent-color:var(--primary)}
+.slider b{font-variant-numeric:tabular-nums;font-size:12.5px;min-width:36px;text-align:right}
+.notice{background:var(--orange-soft);border:1px solid #f4dcb5;color:#8a5610;
+  border-radius:8px;padding:9px 11px;font-size:11.5px;line-height:1.55;margin-bottom:10px}
+.notice.red{background:var(--red-soft);border-color:#f5c9c5;color:#9b2b22}
+.endpoints{max-height:132px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px;
+  background:#fcfdff;display:grid;gap:5px}
+.endpoints .ep{display:flex;gap:7px;align-items:flex-start;font-size:11.5px;color:var(--ink2)}
+.endpoints .ep input{margin-top:3px;accent-color:var(--primary)}
+.ep small{color:var(--faint);display:block;font-size:10.5px;line-height:1.4}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.grid3 label{font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px}
+.grid3 input{padding:6px 8px;font-size:12px}
+.runbox{margin-top:18px;border-top:1px solid var(--line2);padding-top:16px;
+  position:sticky;bottom:-18px;background:#fff;z-index:3;padding-bottom:6px}
+#runBtn{width:100%;padding:11px;font-size:13.5px;border-radius:9px}
+.progress{height:5px;background:#eef1f6;border-radius:4px;overflow:hidden;margin-top:10px}
+.progress i{display:block;height:100%;width:35%;background:linear-gradient(90deg,#2f5fe0,#7aa5ff);
+  border-radius:4px;animation:slide 1.15s infinite ease-in-out}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+#jobMsg{font-size:11.5px;color:var(--muted);margin-top:7px;min-height:17px}
+.exports{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
+.exports .btn{padding:6px 2px;text-align:center;font-size:11px}
+
+.main{min-width:0}
+.tabs{display:flex;gap:3px;background:#fff;border:1px solid var(--line);border-radius:11px;
+  padding:5px;box-shadow:var(--shadow);margin-bottom:16px;position:sticky;top:70px;z-index:10}
+.tab{border:0;background:transparent;color:var(--muted);padding:8px 18px;border-radius:8px;
+  font-size:13px;font-weight:500;transition:.15s}
+.tab:hover{color:var(--ink2);background:#f6f8fc}
+.tab.on{background:var(--primary-soft);color:var(--primary);font-weight:650}
+.tab .cnt{font-size:10.5px;background:#e9edf5;color:var(--muted);padding:1px 6px;
+  border-radius:8px;margin-left:6px;font-variant-numeric:tabular-nums}
+.tab.on .cnt{background:#d8e3ff;color:var(--primary)}
+.pane{min-width:0}
+
+.empty{background:#fff;border:1px dashed #ccd5e4;border-radius:12px;padding:56px 24px;text-align:center}
+.empty .ico{width:52px;height:52px;border-radius:14px;background:var(--primary-soft);color:var(--primary);
+  display:grid;place-items:center;font-size:25px;margin:0 auto 16px}
+.empty h2{font-size:16px;font-weight:650;margin-bottom:6px}
+.empty p{color:var(--muted);font-size:13px;max-width:480px;margin:0 auto 18px;line-height:1.7}
+
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px 18px;
+  box-shadow:var(--shadow);position:relative;overflow:hidden}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--primary)}
+.kpi.red::before{background:var(--red)}.kpi.green::before{background:var(--green)}
+.kpi.orange::before{background:var(--orange)}
+.kpi .lbl{font-size:11.5px;color:var(--muted)}
+.kpi .num{font-size:28px;font-weight:700;line-height:1.25;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.kpi.red .num{color:var(--red)}.kpi.green .num{color:var(--green)}
+.kpi .sub{font-size:11px;color:var(--faint)}
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px 18px;box-shadow:var(--shadow)}
+.panel h4{font-size:12.5px;font-weight:650;color:var(--ink2);margin-bottom:14px;
+  display:flex;justify-content:space-between;align-items:center}
+.panel h4 span{font-weight:400;color:var(--faint);font-size:11px}
+.barrow{display:grid;grid-template-columns:62px 1fr 44px;align-items:center;gap:10px;margin:9px 0}
+.barrow .bn{font-size:11.5px;color:var(--muted);text-align:right}
+.bartrack{height:9px;background:#f0f3f8;border-radius:5px;overflow:hidden}
+.barfill{display:block;height:100%;border-radius:5px}
+.barrow .bv{font-size:11.5px;color:var(--ink2);text-align:right;font-variant-numeric:tabular-nums}
+.donutwrap{display:flex;align-items:center;gap:20px}
+.donut{width:118px;height:118px;border-radius:50%;position:relative;flex:none;
+  background:conic-gradient(#e3e8f0 0 100%)}
+.donut::after{content:"";position:absolute;inset:19px;background:#fff;border-radius:50%}
+.donut .ctr{position:absolute;inset:0;display:grid;place-content:center;text-align:center;z-index:1}
+.donut .ctr b{font-size:21px;line-height:1.1;font-variant-numeric:tabular-nums}
+.donut .ctr small{font-size:10px;color:var(--muted)}
+.legend{display:grid;gap:6px;flex:1;min-width:0}
+.legend div{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--ink2)}
+.legend i{width:9px;height:9px;border-radius:3px;flex:none}
+.legend b{margin-left:auto;font-variant-numeric:tabular-nums}
+.batchgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.batch{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 15px;box-shadow:var(--shadow)}
+.batch .k{font-size:11px;font-weight:700;letter-spacing:.5px}
+.batch .v{font-size:23px;font-weight:700;line-height:1.3}
+.batch.p0 .k,.batch.p0 .v{color:var(--red)}
+.batch.p1 .k,.batch.p1 .v{color:var(--orange)}
+.batch.p2 .k,.batch.p2 .v{color:var(--blue)}
+.batch .d{font-size:11px;color:var(--faint)}
+.funnel{display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+.funnel b{color:var(--ink);font-variant-numeric:tabular-nums}
+.funnel .arw{color:#c3cbda}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--faint);
+  font-weight:650;padding:9px 10px;border-bottom:1px solid var(--line);background:#fafbfd;
+  white-space:nowrap;position:sticky;top:0;z-index:2}
+th.sortable{cursor:pointer;user-select:none}th.sortable:hover{color:var(--primary)}
+th.sortable::after{content:"⇅";opacity:.4;font-size:9px;margin-left:3px}
+th.sortable.asc::after{content:"↑";opacity:.9;color:var(--primary)}
+th.sortable.desc::after{content:"↓";opacity:.9;color:var(--primary)}
+td{padding:9px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+tbody tr{cursor:pointer}tbody tr:hover{background:#f7faff}
+tr:last-child td{border-bottom:0}
+.badge{display:inline-block;padding:1px 7px;border-radius:5px;font-size:10.5px;font-weight:650;white-space:nowrap}
+.b-critical{background:var(--red-soft);color:var(--red)}
+.b-high{background:#fdf0ef;color:#c53c30}
+.b-medium{background:var(--orange-soft);color:#a5640f}
+.b-low{background:var(--blue-soft);color:#0a6da3}
+.b-info{background:#f1f3f7;color:var(--muted)}
+.prio{display:inline-block;padding:1px 6px;border-radius:4px;font:700 10.5px ui-monospace,Consolas,monospace}
+.pr-P0{background:var(--red-soft);color:var(--red)}
+.pr-P1{background:var(--orange-soft);color:#a5640f}
+.pr-P2{background:var(--blue-soft);color:#0a6da3}
+.chip{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px;white-space:nowrap;
+  background:#f1f3f7;color:var(--muted)}
+.chip.checksum{background:var(--green-soft);color:var(--green)}
+.chip.context{background:var(--blue-soft);color:#0a6da3}
+.chip.active{background:var(--red-soft);color:var(--red)}
+.chip.expired,.chip.inactive{background:var(--green-soft);color:var(--green)}
+.chip.structure{background:var(--blue-soft);color:#0a6da3}
+.chip.error{background:var(--orange-soft);color:#a5640f}
+.code{font:12px ui-monospace,SFMono-Regular,Consolas,monospace;background:#f6f8fc;
+  padding:1px 5px;border-radius:4px;overflow-wrap:anywhere;word-break:break-all;color:#1d2940}
+.ellip{max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.toolbar select,.toolbar input[type=search]{width:auto;min-width:108px;font-size:12px;padding:6px 9px}
+.toolbar input[type=search]{min-width:210px}
+.toolbar .spacer{flex:1}
+.tablebox{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:auto;
+  box-shadow:var(--shadow);max-height:calc(100vh - 230px)}
+.pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:10px;
+  font-size:12px;color:var(--muted)}
+.pager .btn{padding:4px 10px;font-size:11.5px}
+
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(520px,94vw);background:#fff;z-index:60;
+  box-shadow:-12px 0 40px rgba(18,30,55,.16);display:flex;flex-direction:column;animation:in .2s ease-out}
+@keyframes in{from{transform:translateX(28px);opacity:.5}to{transform:none;opacity:1}}
+.drawer header{padding:18px 22px;border-bottom:1px solid var(--line);display:flex;
+  justify-content:space-between;align-items:flex-start}
+.drawer header h3{font-size:15px;font-weight:650}
+.drawer .dbody{padding:18px 22px;overflow:auto;flex:1}
+.dsec{margin-bottom:20px}
+.dsec h5{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);margin-bottom:7px}
+.dsec .val{font:12.5px ui-monospace,Consolas,monospace;background:#f6f8fc;border:1px solid var(--line2);
+  border-radius:7px;padding:10px 12px;overflow-wrap:anywhere;word-break:break-all;max-height:170px;overflow:auto}
+.dsec ul{margin-left:17px}.dsec li{font-size:12.5px;color:var(--ink2);margin:3px 0}
+.dsec p{font-size:12.5px;color:var(--ink2);line-height:1.7}
+.kv{display:grid;grid-template-columns:92px 1fr;gap:6px 10px;font-size:12.5px}
+.kv .k{color:var(--muted)}
+.drawer footer{padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:8px}
+.overlay{position:fixed;inset:0;background:rgba(18,30,55,.28);z-index:50}
+
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(620px,94vw);
+  background:#fff;border-radius:12px;box-shadow:0 24px 70px rgba(18,30,55,.25);z-index:70;
+  display:flex;flex-direction:column;max-height:76vh}
+.modal header{padding:15px 20px;border-bottom:1px solid var(--line);font-weight:650}
+.modal .list{overflow:auto;padding:8px 12px;flex:1;min-height:200px}
+.modal .item{padding:7px 10px;border-radius:7px;cursor:pointer;font-size:12.5px;display:flex;gap:9px}
+.modal .item:hover{background:#f3f6fc}
+.modal .item .ic{color:var(--primary)}
+.modal .item.file .ic{color:var(--faint)}
+.modal footer{padding:12px 20px;border-top:1px solid var(--line);display:flex;justify-content:space-between;
+  align-items:center;gap:10px;font-size:11.5px;color:var(--muted)}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1b2436;color:#fff;
+  padding:10px 18px;border-radius:9px;font-size:12.5px;z-index:90;box-shadow:0 10px 30px rgba(0,0,0,.2);
+  opacity:0;pointer-events:none;transition:.25s}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+#toast.err{background:#a82a20}
+@media(max-width:1100px){.layout{grid-template-columns:1fr}.side{position:static;max-height:none}
+  .kpis{grid-template-columns:repeat(2,1fr)}.panels{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand"><span class="logo">◈</span>senscan<span class="tag">审计工作台</span></div>
+  <div class="topmeta">
+    <span class="pill" id="envPill">检测中…</span>
+    <span id="verTxt" class="mono tiny"></span>
+  </div>
+</div>
+
+<div class="layout">
+  <aside class="side">
+    <h3><span class="n">1</span>目标</h3>
+    <div class="field">
+      <label title="支持文件或目录，目录递归；每行一个">路径 · 每行一个</label>
+      <textarea id="paths" spellcheck="false" placeholder="C:\logs\app.log&#10;C:\firmware\out"></textarea>
+    </div>
+    <div class="row">
+      <button class="btn ghost sm" id="browseBtn" title="浏览本机路径，文件或目录均可">浏览…</button>
+      <button class="btn sm" id="demoBtn" title="填入内置示例数据路径">示例路径</button>
+    </div>
+
+    <h3><span class="n">2</span>参数</h3>
+    <div class="field">
+      <label title="越高越保守，误报越少">置信度阈值</label>
+      <div class="slider"><input type="range" id="conf" min="0.30" max="0.95" step="0.05" value="0.55">
+        <b id="confVal">0.55</b></div>
+    </div>
+    <div class="checks">
+      <label class="chk" title="用 tshark 抽取明文载荷；TLS 正文无法扫描"><input type="checkbox" id="pcap" checked><span>解析抓包<span class="hint">仅明文，TLS 正文不可扫</span></span></label>
+      <label class="chk" title="固件产物可能产生大量误报"><input type="checkbox" id="binary"><span>包含二进制<span class="hint">误报会明显增多</span></span></label>
+      <label class="chk" title="只影响导出的报告文件，界面仍显示明文"><input type="checkbox" id="redact"><span>导出脱敏<span class="hint">界面仍显示明文</span></span></label>
+    </div>
+    <div class="field" style="margin-top:12px">
+      <label title="每行一条：值 / 实体:值 / regex: / 通配符；# 开头为注释">白名单 · 可选</label>
+      <textarea id="wl" spellcheck="false" placeholder="# 已知安全的测试值&#10;MAC:001a2b3c4d5e"></textarea>
+    </div>
+
+    <h3><span class="n">3</span>验证</h3>
+    <div class="checks">
+      <label class="chk" title="JWT 有效期、PEM、签名 URL 过期、临时凭据；不联网"><input type="checkbox" id="vLocal" checked><span>离线验证<span class="hint">有效期 / 结构 / 过期；不联网</span></span></label>
+      <label class="chk" title="仅调用只读端点；webhook 等有副作用的凭据不做在线验证"><input type="checkbox" id="vOnline"><span>在线验证 · 需授权<span class="hint">只读端点，需显式授权</span></span></label>
+    </div>
+    <div id="onlineCfg" class="hide" style="margin-top:10px">
+      <div class="notice red">凭据将<strong>发送到所选端点</strong>。请确认已获授权且账户属于你方资产；审计只记 hash，不记原值。</div>
+      <label style="font-size:11.5px;color:var(--muted);display:block;margin-bottom:5px">端点</label>
+      <div class="endpoints" id="epList"></div>
+      <div class="field" style="margin-top:9px">
+        <label>输入 <span class="mono">允许在线验证</span></label>
+        <input type="text" id="confirmPhrase" placeholder="允许在线验证" autocomplete="off">
+      </div>
+      <label class="chk" style="margin-bottom:9px"><input type="checkbox" id="vAuthorized"><span>我已获得测试授权</span></label>
+      <div class="grid3">
+        <div><label title="单次最多验证条数">上限</label><input type="number" id="maxChecks" value="20" min="1" max="500"></div>
+        <div><label title="每秒请求数">QPS</label><input type="number" id="qps" value="2" min="0.2" max="20" step="0.5"></div>
+        <div><label title="单次请求超时（秒）">超时 s</label><input type="number" id="timeout" value="3" min="1" max="20" step="0.5"></div>
+      </div>
+    </div>
+
+    <div class="runbox">
+      <div class="row" style="gap:8px">
+        <button class="btn primary" id="runBtn">开始扫描</button>
+        <button class="btn hide" id="stopBtn" style="flex:0 0 68px" title="停止本次扫描">停止</button>
+      </div>
+      <div class="progress hide" id="progress"><i></i></div>
+      <div id="jobMsg"></div>
+      <div class="exports">
+        <button class="btn sm" data-exp="html" title="导出 HTML 报告">HTML</button>
+        <button class="btn sm" data-exp="csv" title="导出 CSV，供合规评审">CSV</button>
+        <button class="btn sm" data-exp="sarif" title="导出 SARIF，供 CI 集成">SARIF</button>
+        <button class="btn sm" data-exp="json" title="导出完整 JSON">JSON</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <nav class="tabs">
+      <button class="tab on" data-tab="overview">概览</button>
+      <button class="tab" data-tab="findings">明细<span class="cnt" id="tabCount">0</span></button>
+      <button class="tab" data-tab="rules">规则<span class="cnt" id="ruleCount">0</span></button>
+      <button class="tab" data-tab="audit">审计</button>
+    </nav>
+
+    <section class="pane" id="pane-overview">
+      <div id="overviewEmpty" class="empty">
+        <div class="ico">◈</div>
+        <h2>暂无结果</h2>
+        <p>填路径后开始扫描，或直接运行内置示例数据。</p>
+        <button class="btn primary" id="demoRunBtn">运行示例</button>
+      </div>
+      <div id="overviewBody" class="hide">
+        <div class="kpis" id="kpis"></div>
+        <div id="tripletAlert" class="notice red hide"></div>
+        <div class="panels">
+          <div class="panel"><h4>风险分布</h4><div id="riskBars"></div></div>
+          <div class="panel"><h4>类别分布</h4><div class="donutwrap">
+            <div class="donut" id="donut"><div class="ctr"><b id="donutNum">0</b><small>命中</small></div></div>
+            <div class="legend" id="legend"></div></div></div>
+        </div>
+        <div class="batchgrid" id="batches"></div>
+        <div class="panel" style="margin-bottom:14px"><h4>降噪与验证 <span id="scanMeta"></span></h4>
+          <div class="funnel" id="funnel"></div>
+          <div id="verifySummary" style="margin-top:12px"></div>
+        </div>
+        <div class="panels">
+          <div class="panel" title="命中数最多的文件"><h4>热点文件</h4><div id="hotFiles"></div></div>
+          <div class="panel" title="同一值出现在多个文件"><h4>扩散面</h4><div id="spread"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane hide" id="pane-findings">
+      <div class="toolbar">
+        <select id="fRisk"><option value="all">全部风险</option><option value="critical">严重</option>
+          <option value="high">高危</option><option value="medium">中危</option><option value="low">低危</option></select>
+        <select id="fPrio"><option value="all">全部批次</option><option value="P0">P0</option>
+          <option value="P1">P1</option><option value="P2">P2</option></select>
+        <select id="fCat"><option value="all">全部类别</option></select>
+        <select id="fEnt"><option value="all">全部实体</option></select>
+        <select id="fLive"><option value="all">全部存活</option></select>
+        <input type="search" id="fQuery" placeholder="搜索值 / 路径 / 上下文">
+        <label class="chk" style="margin:0" title="列表、详情与复制操作均隐藏原值"><input type="checkbox" id="maskVals"><span>隐藏值</span></label>
+        <button class="btn sm" id="colHelpBtn" title="解释「证据」与「存活」两列">列说明</button>
+        <span class="spacer"></span><span class="tiny dim" id="filterCount"></span>
+      </div>
+      <div id="colHelp" class="notice hide" style="margin-bottom:12px">
+        <b>证据</b>：这条是不是真的 —— 已校验（校验和 / 结构解析通过）、上下文（同行有字段名）、仅格式（只匹配形状）。<br>
+        <b>存活</b>：这凭据还能不能用 —— 仍有效 / 已失效 / 已过期 / 结构有效 / 未验证。
+        MAC、IMEI、序列号等身份标识不是凭据，没有"能否使用"的概念，显示「—」。
+        <b>未验证 ≠ 已失效</b>；在线验证默认关闭。
+      </div>
+      <div class="tablebox"><table><thead><tr>
+        <th>#</th><th class="sortable" data-key="priority">批次</th>
+        <th class="sortable" data-key="risk">风险</th><th>类别</th>
+        <th class="sortable" data-key="entity">实体</th>
+        <th title="证据：这条命中凭什么算真的（点「列说明」看全部取值）">证据</th>
+        <th title="存活：这凭据现在还能不能用（点「列说明」看全部取值）">存活</th>
+        <th class="sortable" data-key="confidence">置信度</th>
+        <th class="sortable" data-key="loc">位置</th><th>命中值</th><th>上下文</th>
+      </tr></thead><tbody id="rows"></tbody></table></div>
+      <div class="pager"><span id="pageInfo"></span>
+        <button class="btn sm" id="prevPage">上一页</button><button class="btn sm" id="nextPage">下一页</button></div>
+    </section>
+
+    <section class="pane hide" id="pane-rules">
+      <div class="toolbar"><input type="search" id="ruleQuery" placeholder="搜索规则 / 实体 / 来源" style="min-width:320px">
+        <span class="spacer"></span><span class="tiny dim" id="ruleInfo"></span></div>
+      <div class="tablebox"><table><thead><tr><th>ID</th><th>实体</th><th>类别</th>
+        <th>风险</th><th>来源</th><th>说明</th></tr></thead><tbody id="ruleRows"></tbody></table></div>
+    </section>
+
+    <section class="pane hide" id="pane-audit">
+      <div class="panel" style="margin-bottom:14px"><h4>审计日志 <span id="auditPath"></span></h4>
+        <p class="tiny dim">每次在线验证写一行 JSONL，只记<b>值 SHA-256 前 16 位</b>，不含原值。</p>
+        <button class="btn sm" id="refreshAudit" style="margin-top:10px">刷新</button></div>
+      <div class="tablebox"><table><thead><tr><th>时间</th><th>端点</th><th>实体</th>
+        <th>规则</th><th>指纹</th><th>结果</th><th>HTTP</th><th>耗时</th><th>Host</th></tr></thead>
+        <tbody id="auditRows"></tbody></table></div>
+      <div class="panel" style="margin-top:14px"><h4>端点目录</h4><div id="epCatalog"></div></div>
+    </section>
+  </main>
+</div>
+
+<div id="drawerOverlay" class="overlay hide"></div>
+<aside id="drawer" class="drawer hide"></aside>
+<div id="browseOverlay" class="overlay hide"></div>
+<div class="modal hide" id="browseModal">
+  <header>选择路径 <span class="tiny dim" style="font-weight:400">· 点击文件即选该文件，点击目录进入</span></header>
+  <div class="list" id="browseList"></div>
+  <footer><span class="mono ellip" id="browsePath" style="max-width:400px"></span>
+    <div class="row" style="flex:none"><button class="btn sm" id="browseUp">上级</button>
+      <button class="btn sm" id="browseCancel">取消</button>
+      <button class="btn primary sm" id="browsePick" title="把当前目录添加为扫描目标">选择目录</button></div></footer>
+</div>
+<div id="toast"></div>
+
+<script>
+const TOKEN = "__SENSCAN_TOKEN__";
+const S = {data:null, jobId:null, endpoints:[], rules:[], page:1, pageSize:20,
+           sortKey:null, sortDir:1, filtered:[], browsePath:"", redact:false,
+           drawerIdx:null, running:false};
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const mask = v => {v=String(v||""); return v.length<=8 ? v.slice(0,2)+"***" : v.slice(0,4)+"***"+v.slice(-4);};
+const short = (v,n=90) => {v=String(v||"").replace(/\s+/g," "); return v.length<=n?v:v.slice(0,n)+"…";};
+const RISK = {critical:"严重",high:"高危",medium:"中危",low:"低危",info:"提示"};
+const RC = {critical:"#d92d20",high:"#e8703a",medium:"#e0a020",low:"#3b9bd6",info:"#a3adbf"};
+const CAT = {credential:"凭据",pki:"密钥/证书",pii:"个人信息",device:"设备标识",infra:"基础设施",session:"会话"};
+const CATC = {pki:"#6d4bd6",credential:"#2f5fe0",session:"#0b83c4",infra:"#16835c",pii:"#e07b16",device:"#8895ad"};
+const VAL = {checksum:"已校验",context:"上下文",format:"仅格式"};
+const VAL_TIP = {checksum:"校验和或结构解析通过，无需再确认真假",
+                 context:"格式成立且同行出现字段名，建议抽查",
+                 format:"只匹配形状，无附加证据，按 P1/P2 处理"};
+const LIVE = {active:"仍有效",inactive:"已失效",expired:"已过期",structure:"结构有效",
+              unknown:"未验证",error:"验证出错","n/a":"不适用"};
+const LIVE_TIP = {active:"在线或本地确认仍可使用",inactive:"确认已失效",
+                  expired:"已过有效期",structure:"JWT / 证书结构有效，未联网确认",
+                  unknown:"未做验证，不代表已失效",error:"验证请求出错，不代表已失效",
+                  "n/a":"身份标识不是凭据，没有存活概念"};
+
+function toast(msg, err){const t=$("toast");t.textContent=msg;t.className="show"+(err?" err":"");
+  clearTimeout(t._t);t._t=setTimeout(()=>t.className="",3000);}
+async function api(path, opts={}){
+  opts.headers = Object.assign({"X-Senscan-Token":TOKEN}, opts.headers||{});
+  if(opts.body && typeof opts.body!=="string"){
+    opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(opts.body);
+  }
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(()=>({error:"响应不是 JSON"}));
+  if(!r.ok || j.error) throw new Error(j.error||("HTTP "+r.status));
+  return j;
+}
+function pickText(id){return $(id)?.value||"";}
+
+// ---------------------------------------------------------------- 初始化
+async function init(){
+  $("verTxt").textContent = "v__SENSCAN_VERSION__";
+  try{
+    const st = await api("/api/state");
+    S.endpoints = st.endpoints||[];
+    $("envPill").textContent = `${st.rules_total} 规则 · tshark ${st.tshark?"可用":"未安装"}`;
+    $("envPill").className = "pill "+(st.tshark?"ok":"warn");
+    $("auditPath").textContent = st.audit_path;
+    $("epList").innerHTML = S.endpoints.filter(e=>e.public).map(e=>
+      `<label class="ep"><input type="checkbox" value="${esc(e.id)}" class="epChk">
+        <span><b>${esc(e.provider)}</b> <span class="mono tiny dim">${esc(e.id)}</span>
+        <small>${esc(e.note)}</small></span></label>`).join("");
+    $("epCatalog").innerHTML = S.endpoints.map(e=>
+      `<div style="border-bottom:1px solid var(--line2);padding:7px 0">
+        <b>${esc(e.provider)}</b> <span class="mono tiny dim">${esc(e.id==="-"?"—":e.id)}</span>
+        ${e.public?'<span class="chip active" style="float:right">只读</span>':'<span class="chip" style="float:right">不支持在线</span>'}
+        <div class="tiny dim">${esc(e.note)}</div></div>`).join("");
+    S.demoPaths = st.demo_paths||[];
+    S.auditDefault = st.audit_path;
+    const rules = await api("/api/rules");
+    S.rules = rules.rows; $("ruleCount").textContent = rules.total;
+    renderRules();
+    if(st.last_job_id){
+      // 旧任务可能已被淘汰；取不到结果不应连累规则库、端点目录等初始化内容。
+      try{
+        S.data = await api("/api/result?id="+encodeURIComponent(st.last_job_id));
+        S.jobId = st.last_job_id;
+        renderAll();
+      }catch(e){S.data=null; S.jobId=null;}
+    }
+  }catch(e){toast("初始化失败："+e.message,true);}
+  await refreshAudit();
+}
+
+// ---------------------------------------------------------------- 扫描
+function collectOpts(){
+  const paths = pickText("paths").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const online = $("vOnline").checked;
+  const chosen = [...document.querySelectorAll(".epChk:checked")].map(x=>x.value);
+  return {
+    paths, min_confidence:parseFloat($("conf").value),
+    whitelist_text:pickText("wl"), include_binary:$("binary").checked,
+    no_pcap:!$("pcap").checked, max_file_mb:512, redact:$("redact").checked,
+    authorized:$("vAuthorized").checked, confirm_phrase:pickText("confirmPhrase").trim(),
+    verify:{
+      local:$("vLocal").checked, online,
+      endpoint_ids:chosen, allow_public:online && chosen.length>0,
+      custom:[], timeout:parseFloat($("timeout").value)||3,
+      max_checks:parseInt($("maxChecks").value)||20,
+      qps:parseFloat($("qps").value)||2, audit_path:S.auditDefault
+    }
+  };
+}
+function validateOpts(o){
+  if(!o.paths.length) return "请填写至少一个路径";
+  if(o.verify.online){
+    if(pickText("confirmPhrase").trim()!=="允许在线验证") return "请输入「允许在线验证」";
+    if(!$("vAuthorized").checked) return "请先勾选授权";
+    if(!o.verify.endpoint_ids.length) return "请至少选一个端点";
+  }
+  return "";
+}
+function setRunning(on){
+  S.running=on;
+  $("runBtn").disabled=on; $("runBtn").textContent=on?"扫描中…":"开始扫描";
+  $("stopBtn").classList.toggle("hide",!on);
+  $("progress").classList.toggle("hide",!on);
+}
+async function runScan(){
+  if(S.running) return toast("已有扫描在进行中",true);
+  let o;
+  try{o=collectOpts();}catch(e){return toast("配置读取失败："+e.message,true);}
+  const bad=validateOpts(o); if(bad) return toast(bad,true);
+  let timer=null;
+  const finish=(msg,err)=>{
+    if(timer)clearInterval(timer);
+    setRunning(false); if(msg)toast(msg,!!err);
+  };
+  setRunning(true); $("jobMsg").textContent="启动中…";
+  try{
+    const r = await api("/api/scan",{method:"POST",body:o});
+    S.jobId=r.job_id; S.redact=o.redact;
+    const deadline=Date.now()+10*60*1000;   // 10 分钟无结果就停止轮询，避免永远转圈
+    timer=setInterval(async()=>{
+      if(Date.now()>deadline){
+        finish("扫描超时，请检查目标目录或缩小范围",true);
+        $("jobMsg").textContent="已超时";
+        return;
+      }
+      try{
+        const j=await api("/api/job?id="+S.jobId);
+        $("jobMsg").textContent=j.status==="running"
+          ? (j.total_files?`${j.phase}（${j.progress}/${j.total_files}）`:j.phase)
+          : (j.error||j.message);
+        if(j.status==="done"){
+          finish();
+          S.data=await api("/api/result?id="+S.jobId);
+          renderAll(); toast("完成 · "+j.message);
+        }else if(j.status==="error"){
+          finish("扫描失败："+j.error,true);
+        }else if(j.status==="cancelled"){
+          finish(j.message||"已停止");
+        }
+      }catch(e){finish("进度查询失败："+e.message,true);}
+    },350);
+  }catch(e){finish("启动失败："+e.message,true);}
+}
+async function stopScan(){
+  if(!S.jobId) return;
+  try{await api("/api/cancel",{method:"POST",body:{job_id:S.jobId}}); $("jobMsg").textContent="正在停止…";}
+  catch(e){toast("停止失败："+e.message,true);}
+}
+
+// ---------------------------------------------------------------- 概览
+function renderAll(){
+  if(!S.data) return;
+  const d=S.data, sum=d.summary, f=d.findings||[];
+  $("overviewEmpty").classList.add("hide"); $("overviewBody").classList.remove("hide");
+  $("tabCount").textContent=f.length;
+  const live=sum.by_liveness||{}, v=d.verification||{};
+  const p0=sum.by_priority?.P0||0, checked=sum.by_validation?.checksum||0;
+  const active=live.active||0;
+  $("kpis").innerHTML=[
+    ["命中",f.length,"span",`${d.stats.files_scanned} 文件 · ${d.scan.duration_ms} ms`],
+    ["P0 待处置",p0,"red","立即处理"],
+    ["已校验",checked,"green","有结构证据"],
+    ["仍有效",active,"orange","凭据可用"]
+  ].map(([l,n,c,s])=>`<div class="kpi ${c}"><div class="lbl">${esc(l)}</div>
+    <div class="num">${n}</div><div class="sub">${esc(s)}</div></div>`).join("");
+  const trip=sum.iot_triplet_files||[];
+  $("tripletAlert").classList.toggle("hide",!trip.length);
+  if(trip.length){
+    const names=trip.map(x=>String(x).split(/[\\/]/).pop()).slice(0,3).join("、");
+    $("tripletAlert").innerHTML=`<b>设备三元组完整泄露</b> — ${esc(names)}${trip.length>3?` 等 ${trip.length} 处`:""} 中 PK / DN / DS 齐备，可仿冒设备接入。<b>删日志无效，须在 IoT 平台作废并轮换密钥。</b>`;
+  }
+  const rk=sum.by_risk||{}, max=Math.max(1,...Object.values(rk));
+  $("riskBars").innerHTML=["critical","high","medium","low","info"].filter(k=>rk[k]).map(k=>
+    `<div class="barrow"><span class="bn">${RISK[k]}</span>
+      <span class="bartrack"><span class="barfill" style="width:${Math.round(rk[k]/max*100)}%;background:${RC[k]}"></span></span>
+      <span class="bv">${rk[k]}</span></div>`).join("")||'<p class="dim">无命中</p>';
+  const cats=Object.entries(sum.by_category||{}), total=Math.max(1,f.length);
+  let acc=0; const grads=[];
+  cats.forEach(([k,n])=>{const from=acc/total*100;acc+=n;
+    grads.push(`${CATC[k]||"#8895ad"} ${from}% ${acc/total*100}%`);});
+  $("donut").style.background=`conic-gradient(${grads.join(",")||"#e3e8f0 0 100%"})`;
+  $("donutNum").textContent=f.length;
+  $("legend").innerHTML=cats.map(([k,n])=>`<div><i style="background:${CATC[k]||"#8895ad"}"></i>
+    ${esc(CAT[k]||k)}<b>${n}</b></div>`).join("")||'<span class="dim">无命中</span>';
+  const pr=sum.by_priority||{};
+  $("batches").innerHTML=[["P0","立即","p0"],["P1","本迭代","p1"],["P2","排期","p2"]]
+    .map(([k,t,c])=>`<div class="batch ${c}"><div class="k">${k}</div>
+      <div class="v">${pr[k]||0}</div><div class="d">${t}</div></div>`).join("");
+  const st=d.stats;
+  $("scanMeta").textContent=`阈值 ${d.scan.min_confidence}`;
+  $("funnel").innerHTML=[["候选",st.candidates],["淘汰",st.rejected_by_validator],
+    ["缺上下文",st.suppressed_no_context],["低置信",st.suppressed_low_confidence],
+    ["白名单",st.whitelisted],["输出",f.length]].map(([k,n],i)=>
+    `${i?'<span class="arw">→</span>':''}<span>${k} <b>${n}</b></span>`).join("");
+  if(v && (v.enabled_local||v.enabled_online)){
+    const chips=Object.entries(live).filter(([,n])=>n).map(([k,n])=>
+      `<span class="chip ${esc(k)}" style="margin:2px 4px 2px 0">${esc(LIVE[k]||k)} ${n}</span>`).join("");
+    $("verifySummary").innerHTML=`<div style="border-top:1px solid var(--line2);padding-top:10px">
+      <div class="tiny dim" style="margin-bottom:6px">${v.enabled_online?"在线 + 离线":"仅离线 · 未外发数据"}
+        · 本地 ${v.local_checked||0} / 在线 ${v.online_checked||0}</div>${chips}
+      ${v.enabled_online?`<div class="notice" style="margin-top:8px">「未验证」<b>不等于</b>「已失效」。审计：<span class="mono">${esc(v.audit_path)}</span></div>`:""}</div>`;
+  }else $("verifySummary").innerHTML="";
+  const hot=sum.by_file||[];
+  $("hotFiles").innerHTML=hot.length?`<table><thead><tr><th>文件</th><th>命中</th><th>风险</th></tr></thead><tbody>`+
+    hot.slice(0,8).map(x=>`<tr><td class="ellip mono" title="${esc(x.file)}">${esc(x.file.split(/[\\/]/).pop())}</td>
+      <td><b>${x.count}</b></td><td><span class="badge b-${esc(x.max_risk)}">${RISK[x.max_risk]||x.max_risk}</span></td></tr>`).join("")+
+    "</tbody></table>":'<p class="dim">无命中</p>';
+  const sp=sum.spread_values||[];
+  $("spread").innerHTML=sp.length?`<table><thead><tr><th>实体</th><th>值</th><th>文件数</th></tr></thead><tbody>`+
+    sp.slice(0,8).map(x=>`<tr><td class="mono">${esc(x.entity)}</td>
+      <td class="code">${esc(short($("maskVals").checked?mask(x.value):x.value,26))}</td><td><b>${x.files.length}</b></td></tr>`).join("")+
+    "</tbody></table>":'<p class="dim">无跨文件重复值</p>';
+  fillFilters(f); applyFilters();
+}
+
+// ---------------------------------------------------------------- 明细
+function fillFilters(f){
+  // 重新扫描 / 单条验证后会重建选项，保留用户当前筛选条件，避免每次被重置。
+  const keep=id=>{const v=$(id).value; return v;};
+  const prev={fRisk:keep("fRisk"),fPrio:keep("fPrio"),fCat:keep("fCat"),fEnt:keep("fEnt"),fLive:keep("fLive")};
+  const uniq=fn=>[...new Set(f.map(fn))].filter(Boolean).sort();
+  const opt=(v,t)=>`<option value="${esc(v)}">${esc(t)}</option>`;
+  $("fCat").innerHTML='<option value="all">全部类别</option>'+uniq(x=>x.category).map(k=>opt(k,CAT[k]||k)).join("");
+  $("fEnt").innerHTML='<option value="all">全部实体</option>'+uniq(x=>x.entity).map(k=>opt(k,k)).join("");
+  $("fLive").innerHTML='<option value="all">全部存活</option>'+
+    uniq(x=>(x.extra?.verification||{}).status||"unknown").map(k=>opt(k,LIVE[k]||k)).join("");
+  Object.entries(prev).forEach(([id,v])=>{
+    const el=$(id); if([...el.options].some(o=>o.value===v)) el.value=v;
+  });
+}
+function liveOf(f){return (f.extra&&f.extra.verification&&f.extra.verification.status)||"unknown";}
+const locOf=x=>x.source.split(/[\\/]/).pop()+":"+x.line+":"+x.column;
+const SORT_GET={priority:x=>x.priority,risk:x=>x.risk,entity:x=>x.entity,
+                confidence:x=>x.confidence,loc:locOf};
+function applyFilters(){
+  const f=(S.data&&S.data.findings)||[];
+  const risk=$("fRisk").value,prio=$("fPrio").value,cat=$("fCat").value,
+        ent=$("fEnt").value,live=$("fLive").value,q=$("fQuery").value.trim().toLowerCase();
+  S.filtered=f.filter(x=>{
+    const hay=[x.entity,x.value,x.context,x.source,x.rule_id].join(" ").toLowerCase();
+    return (risk==="all"||x.risk===risk)&&(prio==="all"||x.priority===prio)&&
+      (cat==="all"||x.category===cat)&&(ent==="all"||x.entity===ent)&&
+      (live==="all"||liveOf(x)===live)&&(!q||hay.includes(q));
+  });
+  if(S.sortKey){
+    const get=SORT_GET[S.sortKey]||(x=>x[S.sortKey]);
+    S.filtered.sort((a,b)=>{
+      const x=get(a),y=get(b);
+      return (typeof x==="number"?x-y:String(x).localeCompare(String(y),"zh"))*S.sortDir;
+    });
+  }
+  S.page=1; renderRows();
+}
+function renderRows(){
+  const list=S.filtered, pages=Math.max(1,Math.ceil(list.length/S.pageSize));
+  S.page=Math.min(Math.max(1,S.page),pages);
+  const slice=list.slice((S.page-1)*S.pageSize,S.page*S.pageSize);
+  const masked=$("maskVals").checked;
+  $("rows").innerHTML=slice.map((x,i)=>{
+    const idx=(S.page-1)*S.pageSize+i, real=(S.data.findings||[]).indexOf(x);
+    const loc=x.source.split(/[\\/]/).pop()+":"+x.line+":"+x.column;
+    const v=short(masked?mask(x.value):x.value,58);
+    const lv=liveOf(x), lvText=lv==="n/a"?"—":(LIVE[lv]||lv);
+    return `<tr data-real="${real}">
+      <td class="dim">${idx+1}</td>
+      <td><span class="prio pr-${x.priority}">${x.priority}</span></td>
+      <td><span class="badge b-${esc(x.risk)}">${RISK[x.risk]||x.risk}</span></td>
+      <td class="dim">${esc(CAT[x.category]||x.category)}</td>
+      <td class="mono">${esc(x.entity)}</td>
+      <td><span class="chip ${esc(x.validation)}" title="${esc(VAL_TIP[x.validation]||"")}">${esc(VAL[x.validation]||x.validation)}</span></td>
+      <td><span class="chip ${esc(lv)}" title="${esc(LIVE_TIP[lv]||lv)}">${esc(lvText)}</span></td>
+      <td><b>${Number(x.confidence).toFixed(2)}</b></td>
+      <td class="mono tiny dim ellip" title="${esc(x.source)}">${esc(loc)}</td>
+      <td><span class="code">${esc(v)}</span></td>
+      <td class="dim ellip" title="${esc(x.context)}">${esc(short(x.context,52))}</td></tr>`;
+  }).join("")||`<tr><td colspan="11" style="text-align:center;padding:38px;color:var(--muted)">
+      无匹配结果</td></tr>`;
+  const st=(S.data&&S.data.scan&&S.data.scan.started_at)||"";
+  const when=st.length>=16?st.slice(5,16).replace("T"," "):"";
+  $("filterCount").textContent=`${list.length} / ${(S.data&&S.data.findings||[]).length} 条`
+    +(when?` · 扫描 ${when}`:"");
+  $("pageInfo").textContent=`${S.page} / ${pages} 页`;
+  $("prevPage").disabled=S.page<=1; $("nextPage").disabled=S.page>=pages;
+  document.querySelectorAll("#rows tr[data-real]").forEach(tr=>
+    tr.addEventListener("click",()=>openDrawer(parseInt(tr.dataset.real,10))));
+}
+function openDrawer(i){
+  const f=(S.data.findings||[])[i]; if(!f)return;
+  S.drawerIdx=i;
+  const hidden=$("maskVals").checked;
+  const shown=hidden?mask(f.value):f.value;
+  const v=f.extra&&f.extra.verification;
+  const reasons=(f.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join("")||"<li>无附加信息</li>";
+  const vblock=v?`<div class="dsec"><h5>存活验证</h5>
+    <p><span class="chip ${esc(v.status)}">${esc(LIVE[v.status]||v.status)}</span>　${esc(v.detail||"")}</p>
+    ${v.endpoint?`<p class="tiny dim" style="margin-top:5px">${esc(v.endpoint)} · HTTP ${v.http_status??"—"} · ${v.elapsed_ms||0} ms</p>`:""}
+    </div>`:"";
+  $("drawer").innerHTML=`<header><div><h3>${esc(f.entity)} <span class="badge b-${esc(f.risk)}">${RISK[f.risk]||f.risk}</span></h3>
+      <div class="tiny dim mono" style="margin-top:4px">${esc(f.rule_id)} · ${esc(f.source)}:${f.line}:${f.column}</div></div>
+      <button class="btn sm" id="drawerClose">关闭</button></header>
+    <div class="dbody">
+      <div class="dsec"><h5>命中值${hidden?"（已隐藏）":""}</h5><div class="val" id="fullValue">${esc(shown)}</div></div>
+      <div class="dsec"><h5>属性</h5><div class="kv">
+        <span class="k">批次</span><span><span class="prio pr-${f.priority}">${f.priority}</span></span>
+        <span class="k">置信度</span><span>${Number(f.confidence).toFixed(3)}</span>
+        <span class="k">证据</span><span>${VAL[f.validation]||f.validation}</span>
+        <span class="k">类别</span><span>${esc(CAT[f.category]||f.category)}</span>
+        <span class="k">次数</span><span>${f.occurrences||1}</span>
+        <span class="k">偏移</span><span class="mono">${f.offset}</span></div></div>
+      <div class="dsec"><h5>判定依据</h5><ul>${reasons}</ul></div>
+      ${vblock}
+      <div class="dsec"><h5>建议</h5><p>${esc(f.remediation||"确认是否属敏感数据")}</p></div>
+      <div class="dsec"><h5>原文</h5><p class="val" style="max-height:110px">${esc(hidden?mask(f.context||"—"):(f.context||"—"))}</p></div>
+    </div>
+    <footer><button class="btn sm" id="copyVal">复制值</button>
+      <button class="btn sm" id="verifyOne">验证存活</button>
+      <span style="flex:1"></span><button class="btn sm" id="drawerClose2">关闭</button></footer>`;
+  $("drawer").classList.remove("hide"); $("drawerOverlay").classList.remove("hide");
+  const close=()=>{S.drawerIdx=null;$("drawer").classList.add("hide");$("drawerOverlay").classList.add("hide");};
+  $("drawerClose").onclick=close; $("drawerClose2").onclick=close; $("drawerOverlay").onclick=close;
+  $("copyVal").onclick=()=>{navigator.clipboard.writeText(shown).then(()=>toast("已复制")).catch(()=>toast("复制失败",true));};
+  $("verifyOne").onclick=()=>verifyOne(i);
+}
+async function verifyOne(i){
+  if(!$("vOnline").checked) return toast("请先在左侧开启在线验证并授权",true);
+  const bad=validateOpts(collectOpts()); if(bad) return toast(bad,true);
+  const cfg={online:true,endpoint_ids:[...document.querySelectorAll(".epChk:checked")].map(x=>x.value),
+    allow_public:true,timeout:parseFloat($("timeout").value)||3,max_checks:5,
+    qps:parseFloat($("qps").value)||2,audit_path:S.auditDefault};
+  // 验证会把 P0 重排到前面，原索引可能指向另一条；按稳定键重新定位
+  const before=(S.data.findings||[])[i];
+  const keyOf=x=>`${x.entity}|${x.value}|${x.source}|${x.line}|${x.column}`;
+  const key=before?keyOf(before):null;
+  toast("验证中…");
+  try{
+    await api("/api/verify",{method:"POST",body:{job_id:S.jobId,indices:[i],config:cfg,
+      authorized:$("vAuthorized").checked, confirm_phrase:pickText("confirmPhrase").trim()}});
+    S.data=await api("/api/result?id="+S.jobId);
+    renderAll(); refreshAudit();
+    let j=i;
+    if(key){
+      const found=(S.data.findings||[]).findIndex(x=>keyOf(x)===key);
+      if(found>=0) j=found;
+    }
+    openDrawer(j); toast("已更新验证结果");
+  }catch(e){toast("验证失败："+e.message,true);}
+}
+
+// ---------------------------------------------------------------- 规则 / 审计
+function renderRules(){
+  const q=($("ruleQuery").value||"").trim().toLowerCase();
+  const rows=S.rules.filter(r=>!q||[r.id,r.entity,r.source,r.note,r.category].join(" ").toLowerCase().includes(q));
+  $("ruleRows").innerHTML=rows.map(r=>`<tr><td class="mono">${esc(r.id)}</td>
+    <td class="mono">${esc(r.entity)}</td><td class="dim">${esc(CAT[r.category]||r.category)}</td>
+    <td><span class="badge b-${esc(r.risk)}">${RISK[r.risk]||r.risk}</span></td>
+    <td class="tiny dim">${esc(r.source)}</td><td class="dim">${esc(short(r.note||r.remediation||"—",90))}</td></tr>`).join("")
+    ||'<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted)">无匹配规则</td></tr>';
+  $("ruleInfo").textContent=`${rows.length} / ${S.rules.length} 条`;
+}
+async function refreshAudit(){
+  try{
+    const d=await api("/api/audit");
+    $("auditRows").innerHTML=d.rows.length?d.rows.map(r=>`<tr>
+      <td class="mono tiny">${esc(r.ts)}</td><td>${esc(r.endpoint)}</td>
+      <td class="mono">${esc(r.entity)}</td><td class="mono tiny">${esc(r.rule_id)}</td>
+      <td class="mono tiny">${esc(r.value_sha256)}</td>
+      <td><span class="chip ${esc(r.status)}">${esc(LIVE[r.status]||r.status)}</span></td>
+      <td>${r.http_status??"—"}</td><td>${r.elapsed_ms||0} ms</td>
+      <td class="mono tiny">${esc(r.host)}</td></tr>`).join("")
+      :'<tr><td colspan="9" style="text-align:center;padding:32px;color:var(--muted)">暂无记录 · 在线验证默认关闭</td></tr>';
+  }catch(e){/* 审计接口失败不阻断主流程 */}
+}
+
+// ---------------------------------------------------------------- 目录浏览
+async function browse(path){
+  try{
+    const d=await api("/api/browse",{method:"POST",body:{path}});
+    S.browsePath=d.path; S.browseParent=d.parent||d.path; $("browsePath").textContent=d.path;
+    $("browseList").innerHTML=(d.parent?`<div class="item" data-up="1"><span class="ic">↑</span>上级</div>`:"")+
+      d.entries.map(x=>`<div class="item ${x.dir?"":"file"}" data-path="${esc(x.path)}" data-dir="${x.dir?1:0}">
+        <span class="ic">${x.dir?"▣":"·"}</span>${esc(x.name)}</div>`).join("")+
+      (d.entries.length?"":'<p class="dim" style="padding:20px;text-align:center">空目录</p>')+
+      (d.truncated?'<p class="dim tiny" style="padding:8px;text-align:center">仅显示前 400 项</p>':"");
+    $("browseList").querySelectorAll(".item").forEach(el=>el.onclick=()=>{
+      if(el.dataset.up) return browse(d.parent);
+      if(el.dataset.dir==="1") return browse(el.dataset.path);
+      // 文件也可直接作为扫描目标，不必手打路径
+      const cur=$("paths").value.trim();
+      $("paths").value=(cur?cur+"\n":"")+el.dataset.path;
+      closeBrowse(); toast("已添加文件");
+    });
+    $("browseModal").classList.remove("hide"); $("browseOverlay").classList.remove("hide");
+  }catch(e){toast("目录读取失败："+e.message,true);}
+}
+function closeBrowse(){$("browseModal").classList.add("hide");$("browseOverlay").classList.add("hide");}
+
+// ---------------------------------------------------------------- 导出
+async function exportFile(fmt){
+  if(!S.jobId) return toast("请先完成一次扫描",true);
+  try{
+    toast("生成中…");
+    const r=await fetch(`/api/export?id=${encodeURIComponent(S.jobId)}&fmt=${fmt}&redact=${$("redact").checked?1:0}`,
+      {headers:{"X-Senscan-Token":TOKEN}});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    // 用服务端带时间戳的文件名，重复导出不会被浏览器自动加 (1)
+    const cd=r.headers.get("Content-Disposition")||"";
+    const m=/filename="?([^";]+)"?/.exec(cd);
+    const blob=await r.blob(), a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download=m?m[1]:`senscan-${fmt}-${Date.now()}.${fmt}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    toast("已导出 "+fmt.toUpperCase());
+  }catch(e){toast("导出失败："+e.message,true);}
+}
+
+// ---------------------------------------------------------------- 事件
+$("conf").oninput=e=>$("confVal").textContent=parseFloat(e.target.value).toFixed(2);
+$("vOnline").onchange=e=>$("onlineCfg").classList.toggle("hide",!e.target.checked);
+$("runBtn").onclick=runScan;
+$("stopBtn").onclick=stopScan;
+$("demoBtn").onclick=()=>{
+  if(!S.demoPaths||!S.demoPaths.length) return toast("未找到示例目录",true);
+  $("paths").value=S.demoPaths.join("\n"); toast("已填入示例路径");
+};
+$("demoRunBtn").onclick=()=>{
+  if(!S.demoPaths||!S.demoPaths.length) return toast("未找到示例目录",true);
+  $("paths").value=S.demoPaths.join("\n"); runScan();
+};
+$("browseBtn").onclick=()=>browse(pickText("paths").split(/\r?\n/)[0]||"");
+$("browseUp").onclick=()=>browse(S.browseParent||S.browsePath);
+$("browseCancel").onclick=closeBrowse; $("browseOverlay").onclick=closeBrowse;
+$("browsePick").onclick=()=>{
+  const cur=$("paths").value.trim();
+  $("paths").value=(cur?cur+"\n":"")+S.browsePath; closeBrowse(); toast("已添加目录");
+};
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+  ["overview","findings","rules","audit"].forEach(k=>
+    $("pane-"+k).classList.toggle("hide",k!==b.dataset.tab));
+  if(b.dataset.tab==="audit") refreshAudit();
+});
+["fRisk","fPrio","fCat","fEnt","fLive"].forEach(id=>$(id).onchange=applyFilters);
+$("fQuery").oninput=applyFilters;
+$("colHelpBtn").onclick=()=>$("colHelp").classList.toggle("hide");
+$("maskVals").onchange=()=>{
+  // 隐藏值开关必须同时作用于列表、概览「扩散面」和已打开的详情抽屉
+  if(S.data) renderAll(); else renderRows();
+  if(S.drawerIdx!=null && !$("drawer").classList.contains("hide")) openDrawer(S.drawerIdx);
+};
+$("prevPage").onclick=()=>{S.page--;renderRows();};
+$("nextPage").onclick=()=>{S.page++;renderRows();};
+document.querySelectorAll("th.sortable").forEach(th=>th.onclick=()=>{
+  const same=S.sortKey===th.dataset.key;
+  S.sortKey=th.dataset.key; S.sortDir=same?-S.sortDir:-1;
+  document.querySelectorAll("th.sortable").forEach(x=>x.classList.remove("asc","desc"));
+  th.classList.add(S.sortDir<0?"desc":"asc");
+  applyFilters();
+});
+$("ruleQuery").oninput=renderRules; $("refreshAudit").onclick=refreshAudit;
+document.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>exportFile(b.dataset.exp));
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){
+  S.drawerIdx=null;
+  $("drawer").classList.add("hide");$("drawerOverlay").classList.add("hide");closeBrowse();}});
+init();
+</script>
+</body>
+</html>
