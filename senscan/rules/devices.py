@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from ..models import DEVICE, PKI, Risk, Rule
+from .keyword import key_re
 
 R = Risk
 
@@ -28,6 +29,7 @@ DEVICE_RULES: tuple[Rule, ...] = (
         validators=("luhn", "not_placeholder"),
         bonus_validators=("luhn",),
         context_keywords=("imei", "meid", "device_id", "deviceid", "device_sn", "序列号", "设备号"),
+        no_context_penalty=0.12,
         remediation="IMEI 属设备标识符（个人信息），日志中应做哈希化或脱敏后再留存",
         note="15 位数字 + Luhn 校验通过",
     ),
@@ -52,9 +54,12 @@ DEVICE_RULES: tuple[Rule, ...] = (
         category=DEVICE,
         group=1,
         validators=("imsi",),
+        context_validators=("not_numeric_field",),
         context_keywords=("imsi", "subscriber", "sim", "运营商", "用户标识"),
+        context_word=True,
+        no_context_penalty=0.25,
         remediation="IMSI 可定位到 SIM 卡持有人，属敏感标识，应立即从日志清除",
-        note="IMSI：15 位且以中国 MCC 开头，与 IMEI 靠前缀与字段名区分",
+        note="IMSI：15 位且以中国 MCC 开头；无校验位，需字段名佐证，裸 15 位不上报",
     ),
     Rule(
         id="iccid",
@@ -72,7 +77,11 @@ DEVICE_RULES: tuple[Rule, ...] = (
     Rule(
         id="oaid",
         entity="OAID",
-        pattern=r"""(?i)\b(?:oaid|openudid|android[_\-]?id|device[_\-]?uuid|guid)\b["']?\s*[:=]\s*["']?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{64}|[0-9a-fA-F]{16,32})""",
+        pattern=key_re(
+            r"oaid|openudid|android[_\-]?id|device[_\-]?uuid|guid",
+            r"设备标识|安卓ID|匿名标识|设备ID",
+            prefix=12,
+        ) + r"""([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{64}|[0-9a-fA-F]{16,32})""",
         risk=R.MEDIUM,
         base_confidence=0.88,
         category=DEVICE,
@@ -84,7 +93,11 @@ DEVICE_RULES: tuple[Rule, ...] = (
     Rule(
         id="idfa",
         entity="IDFA",
-        pattern=r"""(?i)\b(?:idfa|idfv|advertising[_\-]?id|ad_id)\b["']?\s*[:=]\s*["']?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})""",
+        pattern=key_re(
+            r"idfa|idfv|advertising[_\-]?id|ad_id",
+            r"广告标识|广告ID",
+            prefix=12,
+        ) + r"""([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})""",
         risk=R.MEDIUM,
         base_confidence=0.88,
         category=DEVICE,
@@ -109,7 +122,10 @@ DEVICE_RULES: tuple[Rule, ...] = (
     Rule(
         id="device-serial",
         entity="DEVICE_SN",
-        pattern=r"""(?i)\b(?:serial[_\-]?no|serialnumber|serial_number|device[_\-]?sn|sn)\b["']?\s*[:=]\s*["']?([A-Za-z0-9]{8,32})(?![A-Za-z0-9])""",
+        pattern=key_re(
+            r"serial[_\-]?no|serialnumber|serial_number|device[_\-]?serial|device[_\-]?sn|sn",
+            r"序列号|设备序列号|设备号|机身码|SN码",
+        ) + r"""([A-Za-z0-9]{8,32})(?![A-Za-z0-9])""",
         risk=R.MEDIUM,
         base_confidence=0.65,
         category=DEVICE,
@@ -150,12 +166,16 @@ DEVICE_RULES: tuple[Rule, ...] = (
     Rule(
         id="ltk",
         entity="LTK",
-        pattern=r"""(?i)\b(?:ltk|long[_\-]?term[_\-]?key|ble[_\-]?ltk)\b[^0-9a-fA-F\n]{0,16}([0-9a-fA-F]{32})(?![0-9a-fA-F])""",
+        pattern=key_re(
+            r"ltk|long[_\-]?term[_\-]?key|ble[_\-]?ltk",
+            r"蓝牙密钥|长期密钥",
+        ) + r"""([0-9a-fA-F]{32})(?![0-9a-fA-F])""",
         risk=R.MEDIUM,
         base_confidence=0.85,
         category=DEVICE,
         group=1,
         validators=("hex32",),
+        context_keywords=("ltk", "long_term_key", "long-term-key", "longtermkey", "ble_ltk"),
         remediation="LTK 可解密已配对的蓝牙链路，需重新配对以生成新密钥",
         note="蓝牙长期密钥，可解密已配对链路",
     ),

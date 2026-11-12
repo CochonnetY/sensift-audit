@@ -5,7 +5,8 @@
 手机号和邮箱为 MEDIUM/LOW，但都配了可执行的处置建议。
 
 误报控制策略：
-- 手机号：号段白名单 + 假号黑名单（13800138000 这类日志里遍地都是）
+- 手机号：号段白名单 + 假号黑名单 + 数值字段反证（size/bytes/count/timestamp 不是手机号）
+  + 无字段名佐证时降权到阈值下。号段合法不等于校验通过，手机号没有校验位。
 - 身份证：GB 11643 加权模 11 校验 + 出生日期合法性，随机串通过率约 1/11 × 日期合法率
 - 银行卡：Luhn + 长度 + 15 位仅认 AMEX 前缀（否则与 IMEI 全面互撞）
 - 全部要求字段名或自然语言上下文，裸数字串不进报告（银行卡强制要求）
@@ -42,9 +43,15 @@ PII_RULES: tuple[Rule, ...] = (
         category=PII,
         group=1,
         validators=("cn_mobile",),
-        context_keywords=("phone", "mobile", "tel", "msisdn", "手机", "电话", "手机号", "联系方式", "contact"),
+        context_validators=("not_numeric_field",),
+        context_keywords=("phone", "mobile", "tel", "msisdn", "cell", "user",
+                          "手机", "电话", "手机号", "联系方式", "联系", "联系人",
+                          "contact", "caller", "callee", "用户", "账号", "绑定",
+                          "收件人", "拨号", "主叫", "被叫", "短信"),
+        context_word=True,
+        no_context_penalty=0.18,
         remediation=_PII_REMEDIATION,
-        note="中国大陆手机号，号段校验通过",
+        note="中国大陆手机号：号段合法 + 字段名佐证；裸数字默认不进报告",
     ),
     Rule(
         id="bank-card",

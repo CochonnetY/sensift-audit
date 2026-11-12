@@ -58,12 +58,19 @@ VALIDATORS: dict[str, Callable[[str], bool]] = {
     "not_placeholder": lambda v: not U.looks_placeholder(v),
 }
 
-# 注意：mac / serial_no / email 只是"形态合理性"过滤，不是校验和或结构解析，
-# 不能标成「已校验」。否则像版本号被误判成 MAC 时，报告还会显示绿色"已校验"，
-# 反而给误报背书。它们归到弱校验：有关键词时显示「上下文」。
+# 需要原文与命中位置的硬校验：纯数字类型靠字段语义反证，而不是靠值本身。
+CONTEXT_VALIDATORS: dict[str, Callable[[str, str, int, int], bool]] = {
+    "not_numeric_field": lambda v, text, start, end: not U.numeric_field_hit(text, start, end),
+}
+
+# 只有"数学/结构证据"才配称「已校验」。以下都只是形态过滤，一律不进这个集合：
+#   mac（首字节/OUI）、serial_no、email、cn_mobile（号段白名单）、
+#   imsi（长度 + MCC 前缀）、hex32（长度 == 32）。
+# 它们没有校验位：把 MD5 当 LTK、把订单号当 IMSI、把 size 当手机号时，
+# 绿色「已校验」只会给误报背书。有字段名时显示「上下文」，否则「仅格式」。
 STRONG_VALIDATORS = frozenset({
     "luhn", "jwt", "pem_body", "basic_auth", "cn_id_card",
-    "cn_mobile", "bank_card", "iccid", "imsi", "cred_uri", "jdbc_cred", "hex32",
+    "bank_card", "iccid", "cred_uri", "jdbc_cred",
     "der_private", "der_public", "der_key",
 })
 
@@ -115,6 +122,9 @@ def _score(rule: Rule, value: str, ctx_kw: str | None, bonus_hits: list[str]) ->
     if ctx_kw:
         score += 0.30 if rule.context_required else 0.24
         reasons.append(f"上下文命中「{ctx_kw}」")
+    elif rule.no_context_penalty:
+        score -= rule.no_context_penalty
+        reasons.append("无字段名佐证（降权）")
 
     if U.looks_placeholder(value):
         score -= 0.55
@@ -211,7 +221,8 @@ def _collapse_same_value(findings: list[Finding]) -> list[Finding]:
 def _new_stats(stats: dict | None) -> dict:
     if stats is None:
         stats = {}
-    for key in ("candidates", "rejected", "suppressed", "suppressed_context", "suppressed_threshold"):
+    for key in ("candidates", "rejected", "rejected_context", "suppressed",
+                "suppressed_context", "suppressed_threshold"):
         stats.setdefault(key, 0)
     return stats
 
@@ -261,7 +272,18 @@ def detect(
                 stats["rejected"] += 1
                 continue
 
-            ctx_kw = U.context_hit(text, span_start, span_end, rule.context_keywords, rule.context_window)
+            for name in rule.context_validators:
+                fn = CONTEXT_VALIDATORS.get(name)
+                if fn is not None and not fn(value, text, span_start, span_end):
+                    ok = False
+                    break
+            if not ok:
+                stats["rejected"] += 1
+                stats["rejected_context"] += 1
+                continue
+
+            ctx_kw = U.context_hit(text, span_start, span_end, rule.context_keywords,
+                                   rule.context_window, word_boundary=rule.context_word)
             if rule.context_required and not ctx_kw:
                 stats["suppressed"] += 1
                 stats["suppressed_context"] += 1

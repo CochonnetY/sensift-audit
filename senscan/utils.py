@@ -201,7 +201,11 @@ _FAKE_MOBILE = frozenset({
 
 
 def cn_mobile_valid(s: str) -> bool:
-    """大陆手机号：号段白名单 + 排除假号与长连号。"""
+    """大陆手机号号段合法性过滤（非校验和）：白名单 + 排除假号与长连号。
+
+    手机号没有校验位，11 位数字与 size/计数/时间戳在语法上不可区分；
+    这一步只证明「可能是号段」，真假要靠字段名语义，报告不应标「已校验」。
+    """
     if not _CN_MOBILE.fullmatch(s):
         return False
     if s in _FAKE_MOBILE:
@@ -389,6 +393,10 @@ def looks_placeholder(v: str) -> bool:
         return True
     if "example.com" in low or "yourdomain" in low:
         return True
+    # 官方文档示例凭据（AKIAIOSFODNN7EXAMPLE / wJalr...EXAMPLEKEY）在日志里遍地都是，
+    # 且长得和真 key 一模一样；随机真凭据以 example 结尾的概率可忽略。
+    if len(low) >= 12 and low.endswith(("example", "examplekey", "examplesecret")):
+        return True
     if any(p.search(v) for p in _TEMPLATE_PATTERNS):
         return True
     if char_diversity(v) < 0.15:  # aaaaaa / 000000
@@ -416,11 +424,17 @@ def extract_context(text: str, start: int, end: int, window: int = 96, max_len: 
     return snippet
 
 
-def context_hit(text: str, start: int, end: int, keywords: tuple[str, ...], window: int = 96) -> str | None:
+_FIELD_SEP_RE = re.compile(r"[,;{}\[\]]")
+_JSON_KEY_IN_TEXT_RE = re.compile(r"""["'][A-Za-z_][\w.\-]{0,48}["']\s*:""")
+
+
+def context_hit(text: str, start: int, end: int, keywords: tuple[str, ...], window: int = 96,
+                word_boundary: bool = False, field_scoped: bool = True) -> str | None:
     """在命中所在行内、前后 window 字符范围查找关键词。
 
-    严格限制在同一行：跨行取上下文会让相邻行的 device/oaid 字样污染判定，
-    这是实测中最容易造成假提权的来源。
+    严格限制在同一行：跨行取上下文会让相邻行的 device/oaid 字样污染判定。
+    默认还收窄到"当前字段"：一行里挤着多个 JSON/logfmt 字段时，
+    {"trace":"139...","phone":"..."} 里的 phone 属于下一个字段，不能给 trace 提权。
     """
     if not keywords:
         return None
@@ -434,12 +448,95 @@ def context_hit(text: str, start: int, end: int, keywords: tuple[str, ...], wind
     # 否则值里恰好含关键词就会自我提权——实测踩过两次：
     #   `DS=xxx` 的键名 "ds=" 落在窗口内；假值 `..._triplet_context` 里的
     #   "triplet" 落在值内。两者都会让本该被阈值压制的缩写规则过线。
+    left, right = text[lo:start], text[end:hi]
+    # 只在结构化 JSON（"key": value）里收窄到当前字段。自由文本如
+    # `Using device triplet: PK=..., DN=..., DS=...` 的三元组语境本来就跨好几个
+    # 逗号片段，一刀切会把真实召回砍掉——所以按是否出现引号键名来区分。
+    if field_scoped and _JSON_KEY_IN_TEXT_RE.search(text[lo:hi]):
+        left = _FIELD_SEP_RE.split(left)[-1]
+        right = _FIELD_SEP_RE.split(right)[0]
     # 用空格拼接左右两段，避免左段末尾与右段开头意外连成一个假词。
-    piece = (text[lo:start] + " " + text[end:hi]).lower()
+    piece = (left + " " + right).lower()
     for kw in keywords:
-        if kw in piece:
+        # 短词（tel / to / id）用子串匹配会命中 hotel / into / device_id，
+        # 这种假提权比漏报更难在报告里发现。开启 context_word 的规则改走词边界。
+        if word_boundary and kw.isascii() and kw.isalpha():
+            if re.search(rf"(?<![a-z0-9_]){re.escape(kw)}(?![a-z0-9_])", piece):
+                return kw
+        elif kw in piece:
             return kw
     return None
+
+
+# ---------------------------------------------------------------- 数值字段反证
+#
+# 11 位 1 开头数字既是合法手机号段，也是一个普通整数（size / 字节数 / 计数器）。
+# 手机号没有校验位，不像身份证(GB11643) 或银行卡(Luhn) 能靠数学区分——
+# 语法层面永远分不开，只能靠字段语义反证。这里做成通用能力，纯数字规则都能挂。
+
+_NUMERIC_FIELD_TERMS = frozenset({
+    "size", "sizes", "byte", "bytes", "kb", "mb", "gb", "length", "len",
+    "count", "cnt", "total", "sum", "ts", "timestamp", "time", "duration",
+    "elapsed", "latency", "ms", "offset", "port", "seq", "index", "idx",
+    "num", "number", "core", "breadth", "width", "height", "depth",
+    "temperature", "temp", "limit", "capacity", "volume", "usage", "score",
+    "price", "amount", "quantity", "qty", "version", "epoch", "uptime",
+    "free", "used", "id", "uid", "pid", "tid", "start", "end", "status",
+    "code", "max", "min", "block", "chunk", "rows", "cols",
+})
+
+_PHONE_HINT_RE = re.compile(
+    r"phone|mobile|(?<![a-z])tel(?:ephone)?(?![a-z])|(?<![a-z])cell(?![a-z])"
+    r"|msisdn|手机|电话|联系|联系方式|联系人|contact|caller|callee",
+    re.I,
+)
+
+_FIELD_KEY_RE = re.compile(r"""["']?([A-Za-z_][\w.\-]{0,48})["']?\s*[:=]\s*$""")
+# 裸数字反证只在 JSON 的 "key": 形式生效；logfmt 的 imsi=460... 不带引号也是真值。
+_JSON_KEY_RE = re.compile(r"""["']?[A-Za-z_][\w.\-]{0,48}["']?\s*:\s*$""")
+_NUMERIC_ZH_RE = re.compile(r"数|量|大小|字节|长度|计数|总数|时间|戳|尺寸|容量|耗时|毫秒")
+
+
+def field_key(text: str, start: int, window: int = 64) -> str | None:
+    """取命中值左侧最近的字段键名，JSON / logfmt / YAML 都认。
+
+    只看同一行、最近一个分隔符之后的片段，避免前一个字段的键名串味。
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    left = text[max(line_start, start - window):start]
+    seg = re.split(r"[,;{}\[\]\n]", left)[-1]
+    m = _FIELD_KEY_RE.search(seg)
+    return m.group(1) if m else None
+
+
+def numeric_field_hit(text: str, start: int, end: int, window: int = 96) -> bool:
+    """判断这个数字是尺寸/计数/时间之类的数值字段，而非手机号。
+
+    反证成立的条件（任一）：
+    1. 键名带数值语义词：size / bytes / count / timestamp / core / temperature …
+    2. 中文键名里的数值语义：用户数、字节数、耗时 …
+    3. 值是 JSON 里的裸数字（"key": 139...，未加引号）——手机号几乎总是字符串。
+    有 phone / 手机 / 联系 等正向字段名佐证时一律放行，优先保召回。
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    left = text[max(line_start, start - window):start]
+    seg = re.split(r"[,;{}\[\]\n]", left)[-1]
+    if _PHONE_HINT_RE.search(seg):
+        return False
+    if _NUMERIC_ZH_RE.search(seg):
+        return True
+
+    key = field_key(text, start, window)
+    if key:
+        words = re.split(r"[_\-.]|(?<=[a-z0-9])(?=[A-Z])", key)
+        if {w.lower() for w in words if w} & _NUMERIC_FIELD_TERMS:
+            return True
+
+    quoted = (start > 0 and end < len(text)
+              and text[start - 1] in "\"'" and text[end] in "\"'")
+    if not quoted and _JSON_KEY_RE.search(seg):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- 位置换算

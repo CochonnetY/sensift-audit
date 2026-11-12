@@ -99,9 +99,12 @@ class Rule:
     group: int = 0
     flags: int = 0
     validators: tuple[str, ...] = ()          # 硬校验：不通过则丢弃
+    context_validators: tuple[str, ...] = ()  # 需要原文+位置的硬校验（反证类），不通过则丢弃
     bonus_validators: tuple[str, ...] = ()    # 软校验：通过则加分
     context_keywords: tuple[str, ...] = ()    # 上下文关键词，命中提权
     context_required: bool = False            # 无上下文直接压制（用于高误报类型）
+    context_word: bool = False                # 关键词按词边界匹配，避免 hotel 里的 tel 误提权
+    no_context_penalty: float = 0.0           # 无上下文时的扣分，把裸格式压到阈值下
     context_window: int = 96
     max_value_len: int = 2048
     # 串口/终端日志按宽度硬折行时，值会被拆到两行（如 JDUNn8\n==）。

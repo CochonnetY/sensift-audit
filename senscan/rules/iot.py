@@ -33,6 +33,7 @@ ProductKey 通常是产品级公开标识，单条定 LOW——但三者齐备�
 from __future__ import annotations
 
 from ..models import CREDENTIAL, DEVICE, Risk, Rule
+from .keyword import _NOT_POLICY
 
 R = Risk
 
@@ -70,14 +71,15 @@ _KEY_REMEDIATION = "产品标识通常公开，但与 DeviceName/DeviceSecret �
 _KSEP = r"[\s_\-]{0,4}"
 
 # 值：8~64 位字母数字。允许 8 位是因为部分平台 ProductKey 只有 11 位。
-_VAL = r"""["']?\s*[:=]\s*["']?([A-Za-z0-9_\-]{8,64})(?![A-Za-z0-9_\-])"""
+_VAL = r"""["']?\s*[:：=＝]\s*["']?([A-Za-z0-9_\-]{8,64})(?![A-Za-z0-9_\-])"""
 
 IOT_RULES: tuple[Rule, ...] = (
     # ==================== 完整字段名（不需要额外语境）====================
     Rule(
         id="iot-device-secret",
         entity="IOT_DEVICE_SECRET",
-        pattern=r"(?i)(?:device" + _KSEP + r"secret|device" + _KSEP + r"key|device" + _KSEP + r"token|dev" + _KSEP + r"secret)" + _VAL,
+        pattern=r"(?i)(?:device" + _KSEP + r"secret|device" + _KSEP + r"key|device" + _KSEP + r"token|dev" + _KSEP + r"secret"
+                r"|设备密钥" + _NOT_POLICY + r"|设备秘钥" + _NOT_POLICY + r"|设备私有密钥)" + _VAL,
         risk=R.CRITICAL,
         base_confidence=0.9,
         category=CREDENTIAL,
@@ -92,7 +94,8 @@ IOT_RULES: tuple[Rule, ...] = (
     Rule(
         id="iot-product-key",
         entity="IOT_PRODUCT_KEY",
-        pattern=r"(?i)(?:product" + _KSEP + r"key|prod" + _KSEP + r"key)" + _VAL,
+        pattern=r"(?i)(?:product" + _KSEP + r"key|prod" + _KSEP + r"key"
+                r"|产品密钥" + _NOT_POLICY + r"|产品标识)" + _VAL,
         risk=R.LOW,
         base_confidence=0.86,
         category=DEVICE,

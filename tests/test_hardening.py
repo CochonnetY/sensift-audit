@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from senscan import pcap, report, scanner, verify as V, webui
+from senscan import pcap, report, scanner, utils as U, verify as V, webui
 from senscan.detectors import detect
 
 
@@ -159,6 +159,205 @@ class TestDetectionCorrectness(unittest.TestCase):
         self.assertEqual(len(pem), 1)
         self.assertEqual(pem[0].rule_id, "pem-private-key-block")
         self.assertIn("-----END", pem[0].value)
+
+
+class TestPhoneVsNumericField(unittest.TestCase):
+    """11 位 1 开头数字既是合法号段，也是普通整数（size/字节数/计数/时间戳）。
+
+    手机号没有校验位，语法上分不开，只能靠字段语义反证 + 证据标签分级。
+    """
+
+    N = "13912345678"
+
+    def _phones(self, text, **kw):
+        return [f for f in detect(text, "t.log", **kw) if f.entity == "PHONE"]
+
+    def test_numeric_field_is_rejected(self):
+        samples = (
+            '{"size":13912345678,"core":"0","breadth":"0","temperature":39}',
+            '{"file_size":13912345678}',
+            '{"bytes":13912345678}',
+            '{"content_length":13912345678}',
+            '{"count":13912345678}',
+            '{"total":13912345678}',
+            '{"timestamp":13912345678}',
+            '{"temperature":13912345678}',
+            'size=13912345678 width=0',
+        )
+        for text in samples:
+            with self.subTest(text=text):
+                self.assertEqual(self._phones(text), [])
+
+    def test_bare_json_number_with_unknown_key_is_rejected(self):
+        # 手机号业务上几乎总是字符串，未加引号的 JSON number 按数值处理
+        self.assertEqual(self._phones('{"payload":13912345678}'), [])
+
+    def test_phone_field_kept_as_context_evidence(self):
+        samples = (
+            '{"phone":"13912345678"}',
+            '{"mobile":"13912345678"}',
+            '{"tel":"13912345678"}',
+            '{"phone":13912345678}',
+            'phone=13912345678',
+            '手机号：13912345678',
+            '联系方式 13912345678',
+        )
+        for text in samples:
+            with self.subTest(text=text):
+                got = self._phones(text)
+                self.assertEqual(len(got), 1)
+                self.assertEqual(got[0].validation, "context")
+
+    def test_phone_never_marked_as_checksum(self):
+        from senscan.detectors import STRONG_VALIDATORS
+        self.assertNotIn("cn_mobile", STRONG_VALIDATORS)
+        got = self._phones('{"phone":"%s"}' % self.N)
+        self.assertNotEqual(got[0].validation, "checksum")
+
+    def test_bare_number_hidden_by_default_and_recoverable(self):
+        text = "req done id=42 cost 13912345678 end"
+        self.assertEqual(self._phones(text), [])
+        got = self._phones(text, min_confidence=0.35)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].validation, "format")
+        self.assertLess(got[0].confidence, 0.55)
+
+    def test_short_keyword_does_not_match_inside_another_word(self):
+        # "hotel" 里的 "tel" 曾会让裸数字自我提权成「上下文」
+        got = self._phones('{"hotel":"13912345678"}', min_confidence=0.35)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0].validation, "format")
+
+    def test_rejection_is_counted(self):
+        stats = {}
+        detect('{"size":13912345678}', "t.log", stats=stats)
+        self.assertGreaterEqual(stats.get("rejected_context", 0), 1)
+
+    def test_id_card_and_bank_card_unaffected(self):
+        from senscan.utils import cn_id_card_valid, bank_card_valid
+        self.assertTrue(cn_id_card_valid("11010519491231002X"))
+        self.assertTrue(bank_card_valid("4539578763621486"))
+        got = detect('{"idcard":"11010519491231002X"}', "t.log")
+        ids = [f for f in got if f.entity == "ID_CARD"]
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(ids[0].validation, "checksum")
+        self.assertEqual([f for f in got if f.entity == "PHONE"], [])
+
+
+class TestAccuracyHardening(unittest.TestCase):
+    """整体准确性审查（2026-11-11）：每条都对应探针复现过的真实缺陷。"""
+
+    IMEI = "35341807450811" + U.luhn_check_digit("35341807450811")
+
+    def _types(self, text, **kw):
+        return [(f.entity, f.validation) for f in detect(text, "t.log", **kw)]
+
+    def test_context_does_not_leak_across_json_fields(self):
+        # 相邻字段的 phone 曾经给 trace 的值提权，左右两个方向都会串味
+        self.assertEqual(self._types('{"trace":"13912345678","phone":"13900000000"}'), [])
+        self.assertEqual(self._types('{"phone":"13900000000","trace":"13912345678"}'), [])
+
+    def test_free_text_context_is_not_narrowed(self):
+        # 无引号键名的自由文本要保留整行语境，否则 IoT 三元组会被砍掉
+        t = ("Using device triplet: PK=a1zk9qm2xv7bn4lp8tc, "
+             "DN=devgw0331kb7yt2rs9qm, DS=kd8svn2lq9zx4wp7rm3bt6yc1fh5nj")
+        self.assertIn("IOT_DEVICE_SECRET", {e for e, _ in self._types(t)})
+
+    def test_official_example_credential_is_placeholder(self):
+        self.assertTrue(U.looks_placeholder("AKIAIOSFODNN7EXAMPLE"))
+        self.assertEqual(self._types("aws_access_key_id=AKIAIOSFODNN7EXAMPLE"), [])
+
+    def test_bare_numeric_identifiers_are_suppressed(self):
+        self.assertEqual(self._types('{"order_no":"460001234567890"}'), [])
+        self.assertEqual(self._types('{"seq":"%s"}' % self.IMEI), [])
+        self.assertEqual(self._types("req 13912345678 done"), [])
+
+    def test_shape_only_validators_never_mark_checksum(self):
+        from senscan.detectors import STRONG_VALIDATORS
+        for name in ("cn_mobile", "imsi", "hex32", "mac", "serial_no", "email"):
+            self.assertNotIn(name, STRONG_VALIDATORS)
+        self.assertEqual(self._types("imsi=460001234567890"), [("IMSI", "context")])
+        self.assertEqual(self._types("ltk=00112233445566778899aabbccddeeff"),
+                         [("LTK", "context")])
+
+    def test_real_identifiers_with_field_name_kept(self):
+        self.assertEqual(self._types("imei=%s" % self.IMEI), [("IMEI", "checksum")])
+        self.assertEqual(self._types('{"imei":"%s"}' % self.IMEI), [("IMEI", "checksum")])
+        self.assertEqual(self._types('{"imei":"%s","phone":"13912345678"}' % self.IMEI),
+                         [("IMEI", "checksum"), ("PHONE", "context")])
+
+    def test_chinese_phone_context_recall(self):
+        for text in ("用户13912345678登录成功", '{"user":"13912345678"}',
+                     "手机号:13912345678", "联系方式 13912345678"):
+            with self.subTest(text=text):
+                self.assertEqual(self._types(text), [("PHONE", "context")])
+
+    def test_chinese_numeric_field_is_not_phone(self):
+        self.assertEqual(self._types('{"用户数":"13912345678"}'), [])
+
+    def test_md5_and_version_still_clean(self):
+        self.assertEqual(self._types('{"md5":"d41d8cd98f00b204e9800998ecf8427e"}'), [])
+        self.assertEqual(self._types('{"fw":"2026.1029.0000"}'), [])
+
+
+class TestChineseKeyNames(unittest.TestCase):
+    """中文键名 / 前缀粘连 / 全角分隔符的召回（2026-11-12）。
+
+    这三类写法在真实设备日志里比英文写法更常见。原先把英文键名写死在正则里，
+    `密码:xxx` 和 `db_password=xxx` 一条都报不出来，是系统性的漏报面。
+    """
+
+    def _types(self, text):
+        return [(f.entity, f.validation) for f in detect(text, "t.log")]
+
+    def test_chinese_key_recall(self):
+        cases = {
+            "密码:Passw0rd!2024": "PASSWORD",
+            "登录密码：Abc123456": "PASSWORD",
+            "序列号:SN2024AB1234": "DEVICE_SN",
+            "设备序列号：SN2024AB1234": "DEVICE_SN",
+            "设备密钥:KD8SVN2LQ9ZX4WP7RM3BT6YC1FH5NJ": "IOT_DEVICE_SECRET",
+            "产品密钥:a1zk9qm2xv7bn4lp8tc": "IOT_PRODUCT_KEY",
+            "蓝牙密钥:00112233445566778899aabbccddeeff": "LTK",
+            "访问令牌:abcdef1234567890abcdef": "TOKEN",
+            "会话ID:A1B2C3D4E5F6A7B8": "SESSION_ID",
+        }
+        for text, entity in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual([e for e, _ in self._types(text)][:1], [entity])
+
+    def test_json_chinese_key_recall(self):
+        self.assertEqual([e for e, _ in self._types('{"私钥":"MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg"}')],
+                         ["PRIVATE_KEY"])
+        self.assertEqual([e for e, _ in self._types('{"公钥":"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE"}')],
+                         ["PUBLIC_KEY"])
+
+    def test_prefixed_key_recall(self):
+        # `db_password` 里 password 前面是下划线，`\b` 不成立，曾经整条漏掉
+        self.assertEqual(self._types("db_password=Passw0rd!2024"), [("PASSWORD", "format")])
+        self.assertEqual([e for e, _ in self._types("user_login_password: Abc123456")],
+                         ["PASSWORD"])
+
+    def test_fullwidth_separators(self):
+        self.assertEqual([e for e, _ in self._types("设备密钥＝KD8SVN2LQ9ZX4WP7RM3BT6YC1FH5NJ")],
+                         ["IOT_DEVICE_SECRET"])
+        self.assertEqual([e for e, _ in self._types("密码＝Abc123456")], ["PASSWORD"])
+
+    def test_policy_words_are_not_credentials(self):
+        # 负向断言：这些是说明文字，值也长得像口令/密钥，不能报
+        for text in ("密码策略: 长度不少于 8 位，包含大小写", "密码强度:高",
+                     "密钥管理: 由 KMS 统一托管", "令牌桶限流: 100r/s",
+                     "序列号规则: 8-32 位字母数字", "公钥算法: EC P-256"):
+            with self.subTest(text=text):
+                self.assertEqual(self._types(text), [])
+
+    def test_generic_key_does_not_steal_specific_entity(self):
+        # 裸「密钥」曾让 generic-api-key（HIGH）抢走 LTK（MEDIUM）与
+        # IOT_PRODUCT_KEY（LOW）——风险等级高的规则在冲突消解里会胜出
+        self.assertEqual([e for e, _ in self._types("蓝牙密钥:00112233445566778899aabbccddeeff")],
+                         ["LTK"])
+        self.assertEqual([e for e, _ in self._types("产品密钥:a1zk9qm2xv7bn4lp8tc")],
+                         ["IOT_PRODUCT_KEY"])
 
 
 if __name__ == "__main__":

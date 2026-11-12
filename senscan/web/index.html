@@ -355,10 +355,11 @@ tr:last-child td{border-bottom:0}
         <span class="spacer"></span><span class="tiny dim" id="filterCount"></span>
       </div>
       <div id="colHelp" class="notice hide" style="margin-bottom:12px">
-        <b>证据</b>：这条是不是真的 —— 已校验（校验和 / 结构解析通过）、上下文（同行有字段名）、仅格式（只匹配形状）。<br>
+        <b>证据</b>：这条是不是真的 —— 已校验（校验和 / 结构解析通过）、上下文（同行有字段名）、仅格式（只匹配形状）。手机号、IMEI/IMSI、MAC 无校验位，最高「上下文」。<br>
         <b>存活</b>：这凭据还能不能用 —— 仍有效 / 已失效 / 已过期 / 结构有效 / 未验证。
         MAC、IMEI、序列号等身份标识不是凭据，没有"能否使用"的概念，显示「—」。
-        <b>未验证 ≠ 已失效</b>；在线验证默认关闭。
+        <b>未验证 ≠ 已失效</b>；在线验证默认关闭。<br>
+        数值字段、订单号、无字段名的裸数字默认不报；同行相邻字段不互相提权，调低阈值可捞回裸线索。
       </div>
       <div class="tablebox"><table><thead><tr>
         <th>#</th><th class="sortable" data-key="priority">批次</th>

@@ -27,7 +27,7 @@ R = Risk
 # 允许跨软换行的 base64 值：折行只在换行处发生，行首缩进被吃掉。
 # 不含空格，所以遇到 JSON 的 `"` / `,` / 普通文本会自然停止。
 _B64_VALUE = (
-    r"""["']?\s*[:=]\s*["']?"""
+    r"""["']?\s*[:：=＝]\s*["']?"""
     r"([A-Za-z0-9+/=_\-]+(?:[ \t]*[\r\n]+[ \t]*[A-Za-z0-9+/=_\-]+)*)"
 )
 
@@ -36,9 +36,13 @@ _KEY_SEP = r"[\s_\-]{0,4}"
 
 _PRIV_FIELDS = (
     r"(?:private" + _KEY_SEP + r"key|priv" + _KEY_SEP + r"key|"
-    r"pri" + _KEY_SEP + r"key|device" + _KEY_SEP + r"private" + _KEY_SEP + r"key)"
+    r"pri" + _KEY_SEP + r"key|device" + _KEY_SEP + r"private" + _KEY_SEP + r"key"
+    r"|私钥|设备私钥|签名私钥)"
 )
-_PUB_FIELDS = r"(?:public" + _KEY_SEP + r"key|pub" + _KEY_SEP + r"key)"
+_PUB_FIELDS = (
+    r"(?:public" + _KEY_SEP + r"key|pub" + _KEY_SEP + r"key"
+    r"|公钥|设备公钥|签名公钥)"
+)
 
 # 裸 DER：所有 ASN.1 SEQUENCE 的 base64 都以 M 开头（0x30 → 'M'）。
 # 用宽松捕获 + der_private/der_public 硬校验，比把十几个前缀塞进正则更好维护，

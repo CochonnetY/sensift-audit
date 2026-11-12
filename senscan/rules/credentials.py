@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from ..models import CREDENTIAL, PKI, SESSION, Risk
 from ..models import Rule
+from .keyword import _NOT_POLICY, key_re
 
 R = Risk
 
@@ -83,7 +84,10 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="aws-secret-access-key",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:aws[_\-]?secret[_\-]?access[_\-]?key|aws[_\-]?secret)\b["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])""",
+        pattern=key_re(
+            r"aws[_\-]?secret[_\-]?access[_\-]?key|aws[_\-]?secret",
+            r"AWS密钥|AWS私有密钥|亚马逊密钥",
+        ) + r"""([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])""",
         risk=R.CRITICAL,
         base_confidence=0.75,
         source="gitleaks",
@@ -321,7 +325,10 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="aliyun-access-key-secret",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:access[_\-]?key[_\-]?secret|ak[_\-]?secret|aliyun[_\-]?(?:secret|sk))\b["']?\s*[:=]\s*["']?([A-Za-z0-9]{30})(?![A-Za-z0-9])""",
+        pattern=key_re(
+            r"access[_\-]?key[_\-]?secret|ak[_\-]?secret|aliyun[_\-]?(?:secret|sk)",
+            r"阿里云密钥|阿里云SK|阿里云Secret",
+        ) + r"""([A-Za-z0-9]{30})(?![A-Za-z0-9])""",
         risk=R.CRITICAL,
         base_confidence=0.72,
         group=1,
@@ -342,7 +349,11 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="tencent-secret-key",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:secret[_\-]?key|secretkey|tencent[_\-]?(?:secret|sk))\b["']?\s*[:=]\s*["']?([A-Za-z0-9]{32})(?![A-Za-z0-9])""",
+        pattern=key_re(
+            r"secret[_\-]?key|secretkey|tencent[_\-]?(?:secret|sk)",
+            r"腾讯云密钥|腾讯云SK|腾讯云Secret",
+            prefix=12,
+        ) + r"""([A-Za-z0-9]{32})(?![A-Za-z0-9])""",
         risk=R.CRITICAL,
         base_confidence=0.7,
         group=1,
@@ -353,7 +364,10 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="huawei-ak-sk",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:huawei|hw)[_\-]?(?:ak|sk|access[_\-]?key)\b["']?\s*[:=]\s*["']?([A-Za-z0-9]{20,64})""",
+        pattern=key_re(
+            r"(?:huawei|hw)[_\-]?(?:ak|sk|access[_\-]?key)",
+            r"华为云密钥|华为AK|华为SK",
+        ) + r"""([A-Za-z0-9]{20,64})""",
         risk=R.HIGH,
         base_confidence=0.7,
         group=1,
@@ -365,7 +379,11 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="wechat-app-secret",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:app[_\-]?secret|appsecret)\b["']?\s*[:=]\s*["']?([A-Za-z0-9]{32})(?![A-Za-z0-9])""",
+        pattern=key_re(
+            r"app[_\-]?secret|appsecret",
+            r"小程序密钥|公众号密钥|微信密钥|AppSecret",
+            prefix=12,
+        ) + r"""([A-Za-z0-9]{32})(?![A-Za-z0-9])""",
         risk=R.HIGH,
         base_confidence=0.72,
         group=1,
@@ -377,7 +395,10 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="session-id",
         entity="SESSION_ID",
-        pattern=r"""(?i)\b(?:jsessionid|phpsessid|asp\.net_sessionid|session[_\-]?id|sessionid|sessid|sid)\b["']?\s*[:=]\s*["']?([A-Za-z0-9\-_.%]{8,128})""",
+        pattern=key_re(
+            r"jsessionid|phpsessid|asp\.net_sessionid|session[_\-]?id|sessionid|sessid|sid",
+            r"会话ID|会话标识|会话号",
+        ) + r"""([A-Za-z0-9\-_.%]{8,128})""",
         risk=R.MEDIUM,
         base_confidence=0.72,
         category=SESSION,
@@ -390,7 +411,11 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="wechat-session-key",
         entity="SESSION_ID",
-        pattern=r"""(?i)\b(?:session[_\-]?key|wx[_\-]?session[_\-]?key)\b["']?\s*[:=]\s*["']?([A-Za-z0-9+/=]{24,})""",
+        pattern=key_re(
+            r"session[_\-]?key|wx[_\-]?session[_\-]?key",
+            r"会话密钥|微信会话密钥",
+            prefix=12,
+        ) + r"""([A-Za-z0-9+/=]{24,})""",
         risk=R.HIGH,
         base_confidence=0.7,
         category=SESSION,
@@ -404,7 +429,15 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="generic-api-key",
         entity="API_KEY",
-        pattern=r"""(?i)\b(?:api[_\-]?key|apikey|app[_\-]?secret|secret[_\-]?key|access[_\-]?key[_\-]?secret|accesskeysecret|client[_\-]?secret)\b["']?\s*[:=]\s*["']?([A-Za-z0-9\-_./+=]{16,128})""",
+        pattern=key_re(
+            r"api[_\-]?key|apikey|api\s?key|app[_\-]?secret|secret[_\-]?key"
+            r"|access[_\-]?key[_\-]?secret|accesskeysecret|client[_\-]?secret",
+            # 不要放裸「密钥」：它会把 `蓝牙密钥:` / `产品密钥:` 抢先判成 API_KEY，
+            # 而这两者分别是 MEDIUM/LOW，冲突消解按风险排序后反而吞掉正确的
+            # LTK 与 IOT_PRODUCT_KEY。泛称交给各自的专用规则。
+            r"API密钥|接口密钥|接口凭证|应用密钥|客户端密钥|加密密钥" + _NOT_POLICY,
+            prefix=12,
+        ) + r"""([A-Za-z0-9\-_./+=]{16,128})""",
         risk=R.HIGH,
         base_confidence=0.62,
         source="gitleaks",
@@ -439,7 +472,12 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="generic-token",
         entity="TOKEN",
-        pattern=r"""(?i)\b(?:access[_\-]?token|refresh[_\-]?token|id[_\-]?token|auth[_\-]?token|xsrf[_\-]?token|csrf[_\-]?token)\b["']?\s*[:=]\s*["']?([A-Za-z0-9\-_./+=~]{16,512})""",
+        pattern=key_re(
+            r"access[_\-]?token|refresh[_\-]?token|id[_\-]?token|auth[_\-]?token"
+            r"|xsrf[_\-]?token|csrf[_\-]?token",
+            r"访问令牌|刷新令牌|认证令牌|授权令牌|令牌" + _NOT_POLICY,
+            prefix=12,
+        ) + r"""([A-Za-z0-9\-_./+=~]{16,512})""",
         risk=R.HIGH,
         base_confidence=0.72,
         group=1,
@@ -461,7 +499,13 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="password-inline",
         entity="PASSWORD",
-        pattern=r"""(?i)\b(?:password|passwd|pwd|passphrase)\b["']?\s*[:=]\s*["']?([^\s"'?&;,\]}]{6,64})""",
+        pattern=key_re(
+            r"password|passwd|pwd|passphrase",
+            r"密码" + _NOT_POLICY,
+            r"口令" + _NOT_POLICY,
+            r"登录密码|账号密码|初始密码|超级密码",
+            prefix=12,
+        ) + r"""([^\s"'?&;,\]}]{6,64})""",
         risk=R.HIGH,
         base_confidence=0.62,
         group=1,
