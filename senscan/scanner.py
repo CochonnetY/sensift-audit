@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import tarfile
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from . import containers
 from . import detectors
 from . import pcap as pcapmod
 from . import utils as U
@@ -20,6 +23,11 @@ DEFAULT_MAX_FILE_MB = 512
 CHUNK_CHARS = 8 * 1024 * 1024
 OVERLAP_LINES = 20
 OVERLAP_CHARS = 8192
+
+# 翻译资源条目（i18n_*.json / resources.arsc / *.arb）的值按定义是 UI 文案。
+# 不整文件跳过，只把置信度门槛抬高：0.62~0.70 的「词典条目」被压掉，
+# 0.90 的真私钥仍会保留。0.25 是实测值，能覆盖这批噪声的最大置信度。
+LOCALE_PENALTY = 0.25
 
 
 class ScanCancelled(RuntimeError):
@@ -41,6 +49,9 @@ class ScanStats:
     suppressed_context: int = 0     # 因缺少上下文关键词被压制
     suppressed_threshold: int = 0   # 因置信度低于阈值被压制
     whitelisted: int = 0
+    container_entries: int = 0
+    locale_entries: int = 0        # 按翻译资源降权处理的条目数
+    container_truncated: bool = False   # 解包预算/条目数用尽，容器只扫了一部分
     skipped: list[str] = field(default_factory=list)
 
     def absorb(self, sub: dict) -> None:
@@ -151,12 +162,15 @@ def _mark_iot_triplets(findings: list[Finding]) -> None:
     by_src: dict[str, set[str]] = {}
     for f in findings:
         if f.entity in _IOT_TRIPLET_ENTITIES:
-            by_src.setdefault(f.source, set()).add(f.entity)
+            # 容器内条目按外层文件归组：三元组分散在同一个 apk 的两个 json 里，
+            # 依然等价于设备身份可被完整仿冒。
+            by_src.setdefault(str(f.extra.get("container_file") or f.source), set()).add(f.entity)
     complete = {src for src, ents in by_src.items() if ents == _IOT_TRIPLET_ENTITIES}
     if not complete:
         return
     for f in findings:
-        if f.source not in complete or f.entity not in _IOT_TRIPLET_ENTITIES:
+        src = str(f.extra.get("container_file") or f.source)
+        if src not in complete or f.entity not in _IOT_TRIPLET_ENTITIES:
             continue
         f.extra["iot_triplet"] = True
         f.reasons = f.reasons + (
@@ -170,9 +184,11 @@ def _mark_iot_triplets(findings: list[Finding]) -> None:
             )
 
 
-def iter_targets(paths: list[Path]) -> list[Path]:
+def iter_targets(paths: list[Path] | list[str]) -> list[Path]:
     out: list[Path] = []
-    for p in paths:
+    for raw in paths:
+        # 公开 API 允许直接传字符串路径，内部一律统一成 Path
+        p = Path(raw).expanduser()
         if p.is_file():
             out.append(p)
         elif p.is_dir():
@@ -267,12 +283,13 @@ def _apply_whitelist(found: list[Finding], whitelist: Whitelist | None, stats: S
 
 
 def scan(
-    paths: list[Path],
+    paths: list[Path] | list[str],
     whitelist: Whitelist | None = None,
     min_confidence: float = 0.55,
     include_binary: bool = False,
     max_file_mb: int = DEFAULT_MAX_FILE_MB,
     enable_pcap: bool = True,
+    enable_container: bool = True,
     verify_config: VerifyConfig | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> ScanResult:
@@ -329,6 +346,54 @@ def scan(
                 continue
             stats.absorb(sub)
             all_findings.extend(_apply_whitelist(found, whitelist, stats))
+            continue
+
+        # 容器走解包通道：APK / JAR / IPA / Office / 压缩包 / SQLite
+        kind = containers.is_container(head)
+        if kind is not None:
+            if not enable_container:
+                stats.files_skipped += 1
+                stats.skipped.append(f"{path} ({kind}，已用 --no-container 禁用)")
+                continue
+            stats.files_scanned += 1
+            stats.bytes_read += size
+            found_any = False
+            budget = containers.Budget()
+            try:
+                for blob in containers.iter_blobs(path, kind, budget):
+                    found_any = True
+                    stats.container_entries += 1
+                    sub = {}
+                    # 单文件容器（sqlite / 纯 gz）条目名与文件名相同，不重复拼一次
+                    label = "" if blob.label == path.name else blob.label
+                    src = f"{source}!{label}" if label else source
+                    threshold = min_confidence
+                    if blob.low_signal:
+                        stats.locale_entries += 1
+                        threshold += LOCALE_PENALTY
+                    got = detectors.detect(blob.text, src, threshold, sub,
+                                           strings_dump=blob.binary)
+                    for f in got:
+                        f.extra.setdefault("container", blob.kind)
+                        f.extra.setdefault("container_file", source)
+                        if label:
+                            f.extra.setdefault("entry", label)
+                    stats.absorb(sub)
+                    all_findings.extend(_apply_whitelist(got, whitelist, stats))
+            except (zipfile.BadZipFile, tarfile.TarError, EOFError, OSError, RuntimeError) as exc:
+                stats.files_skipped += 1
+                stats.skipped.append(f"{path} ({kind} 解析失败: {exc})")
+            if budget.truncated:
+                stats.container_truncated = True
+                stats.skipped.append(
+                    f"{path} ({kind} 解包预算用尽：已扫 {budget.entries} 条目 / "
+                    f"{budget.used // (1024 * 1024)}MB，其余条目未扫描)"
+                )
+            if not found_any:
+                stats.skipped.append(
+                    f"{path} ({kind} 内没有可扫的文本条目："
+                    f"{budget.entries} 条目均非文本/未通过体积上限)"
+                )
             continue
 
         if not include_binary and U.looks_binary(head):

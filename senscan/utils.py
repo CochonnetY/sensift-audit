@@ -9,6 +9,7 @@ import math
 import re
 from bisect import bisect_right
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 # ---------------------------------------------------------------- 校验算法
@@ -279,6 +280,95 @@ def pem_kind(block: str) -> str:
     return m.group(1) if m else "PRIVATE KEY"
 
 
+# 真实 PEM body 是 64 列 base64；日志被截断时也至少会留下几十个字符的第一行。
+# 文档/截断样例常写成 `MIIEow...`，允许「短前缀 + 省略号」这种明确的省略写法。
+_PEM_BODY_LINE = re.compile(r"(?:[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/=]{6,}\.{2,})")
+# 单条密钥材料的形态：DER/base64 有 + / =，十六进制密钥是纯 hex。
+_B64_ONLY = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+_HEX_ONLY = re.compile(r"[0-9A-Fa-f]+")
+
+
+def pem_head_has_body(text: str, end: int, lookahead: int = 512) -> bool:
+    """BEGIN 头之后必须紧跟 base64 正文，否则只是库里的报错/提示字符串。
+
+    OpenSSL、BoringSSL、各家 PEM 解析器都会把
+    `-----BEGIN RSA PRIVATE KEY-----` 编译进 .so 当格式说明（后面紧跟的是
+    `-----END ...-----` 或「no start line」这类提示）。APK 里这类串一次能刷出
+    十几条 HIGH，把真正的私钥泄露埋在噪声里。真正被日志截断的私钥，
+    头后面一定还有 body 的第一行。
+    """
+    tail = text[end:end + lookahead].lstrip(" \t\r\n")
+    if not tail:
+        return False
+    first = tail.split("\n", 1)[0].strip()
+    return bool(_PEM_BODY_LINE.fullmatch(first))
+
+
+def key_material_shape(value: str) -> bool:
+    """`PrivateKey:` 后面的值得像密钥材料，不能是随手一段标识符。
+
+    误报来源很具体：二进制抽串把相邻两条无关字符串拼在一起，
+    或 `PrivateKey` 出现在 `PrivateToThisPrivateZone` 这种长标识符里，
+    分隔符一粘就成了「字段=值」。所以要求值满足其一：
+    DER/base64 带填充或 +/、以 M 起头的长 base64、长十六进制。
+    """
+    if len(value) < 6 or value.count("=") > 2:
+        return False
+    if "=" in value.rstrip("="):
+        return False                      # = 只能作为尾部填充
+    if not _B64_ONLY.fullmatch(value) and not _HEX_ONLY.fullmatch(value):
+        return False
+    if value.startswith("M") and len(value) >= 32:
+        return True                       # ASN.1 SEQUENCE 的 DER base64
+    if len(value) >= 8 and ("=" in value or "+" in value or "/" in value):
+        return True
+    if len(value) >= 32 and _HEX_ONLY.fullmatch(value) and high_entropy(value):
+        return True
+    return False
+
+
+# UI 模板 / JS 字典里 `password: "[type=password]"` 这类属性字面量。
+# 键名看着像口令字段，值其实是选择器，值里必然带 `attr=value` 形态。
+_MARKUP_ATTR = re.compile(
+    r"(?i)(?:^|[\[\{\s])(?:type|class|name|id|value|src|href|for|role|style|"
+    r"data-[\w-]+)\s*=\s*[\w-]+"
+)
+
+
+def not_markup_literal(value: str) -> bool:
+    """拒绝 HTML/CSS 属性字面量充当口令，避免把 UI 代码报成 HIGH。
+
+    真实口令里出现 `type=xxx` 的概率极低；即便出现，也很难是有效凭据。
+    """
+    return not _MARKUP_ATTR.search(value)
+
+
+_NON_ASCII_OR_SPACE = re.compile(r"[^\x00-\x7f]|\s")
+
+
+def plausible_secret_value(value: str) -> bool:
+    """键值类规则的「值」必须像机器生成的秘密，不能是自然语言文案。
+
+    APK 里最大的一类误报来自翻译资源：`"input_hint_password": "パスワードを
+    入力してください"`、`"device_name": "Apparaatnaam"`。键名看着完全合法，
+    值其实是 UI 文案。凭据 / 密钥 / 设备标识的值有几个稳定特征：
+    ASCII 紧凑串、无空白、不是单个自然语言单词。
+    """
+    if not value or len(value) < 6:
+        return False
+    if _NON_ASCII_OR_SPACE.search(value):
+        return False
+    if value.isalpha() and len(value) < 40:
+        # 全小写或「首字母大写 + 其余小写」＝词典单词；
+        # 驼峰、全大写、混合大小写的标识符仍然保留（如 MyDevice / AbCdEf）
+        if value.islower() or (value[0].isupper() and value[1:].islower()):
+            return False
+    # kebab-case 英文词组（Drittanbieter-Netdisk-accessToken）也是文案
+    if value.count("-") >= 2 and not any(c.isdigit() for c in value):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------- 连接串
 
 
@@ -298,6 +388,10 @@ def cred_uri_ok(v: str) -> bool:
     """
     m = _URI_CRED.match(v)
     if not m:
+        return False
+    # DEX 里编译进去的 URL 正则源码：`ftp://)(?:(?:[...]+\.)+[...]+@`
+    # 形态上像带凭据 URI，其实是正则片段。
+    if "(?:" in v or "\\" in v or "{1," in v:
         return False
     user, pwd = m.group(1), m.group(2)
     if looks_placeholder(user) or looks_placeholder(pwd):
@@ -335,6 +429,10 @@ def email_ok(v: str) -> bool:
         return False  # 排除 3@10.20.30.40 这类连接串片段
     if not any(ch.isalpha() for ch in local):
         return False  # 纯数字 local 只出现在 URI 凭据里
+    # `secp384r1_CompactStyleWithPlurals@1346441731.formatter` 这类
+    # 编译器/格式化器内部符号：域名首段是纯数字，且不是真实邮件域
+    if domain.split(".", 1)[0].isdigit():
+        return False
     if domain.endswith((".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")):
         return False
     if domain in ("example.com", "example.org", "example.net", "test.com", "domain.com"):
@@ -377,6 +475,7 @@ _TEMPLATE_PATTERNS = (
 )
 
 
+@lru_cache(maxsize=16384)
 def looks_placeholder(v: str) -> bool:
     """识别文档示例值、脱敏值、模板变量——这是降噪的第一道闸。
 
@@ -397,11 +496,16 @@ def looks_placeholder(v: str) -> bool:
     # 且长得和真 key 一模一样；随机真凭据以 example 结尾的概率可忽略。
     if len(low) >= 12 and low.endswith(("example", "examplekey", "examplesecret")):
         return True
-    if any(p.search(v) for p in _TEMPLATE_PATTERNS):
+    # 六个模板正则逐个跑很贵，先看有没有模板特征字符再决定
+    if any(c in v for c in "${<%*") and any(p.search(v) for p in _TEMPLATE_PATTERNS):
         return True
-    if char_diversity(v) < 0.15:  # aaaaaa / 000000
+    # 比例判据只适用于短串：1024 字符的 PEM 私钥含 60+ 种字符，比例也只有 0.06，
+    # 会被误判成占位值扣 0.55 分——真私钥因此被阈值丢掉，只剩 BEGIN 头的弱命中。
+    if len(v) <= 128 and char_diversity(v) < 0.15:  # aaaaaa / 000000
         return True
-    if re.fullmatch(r"(.{1,4})\1{2,}", low):  # abcabcabc
+    if len(v) > 128 and len(set(v)) <= 3:           # 超长重复串照样挡
+        return True
+    if len(v) >= 6 and re.fullmatch(r"(.{1,4})\1{2,}", low):  # abcabcabc
         return True
     return False
 
@@ -409,23 +513,124 @@ def looks_placeholder(v: str) -> bool:
 # ---------------------------------------------------------------- 上下文
 
 
-def extract_context(text: str, start: int, end: int, window: int = 96, max_len: int = 240) -> str:
-    """截取命中位置前后的原文，压成一行，供人工复核。"""
-    left = max(0, start - window)
-    right = min(len(text), end + window)
-    snippet = text[left:right]
-    snippet = snippet.replace("\r", "").replace("\n", " ⏎ ").replace("\t", " ")
-    snippet = re.sub(r"\s{2,}", " ", snippet).strip()
-    if len(snippet) > max_len:
-        # 保证命中值本身留在片段里
-        head = max_len // 2
-        tail = max_len - head - 1
-        snippet = f"{snippet[:head]}…{snippet[-tail:]}"
-    return snippet
+HIT_OPEN = "⟦"
+HIT_CLOSE = "⟧"
+
+
+def _flatten(s: str) -> str:
+    """把多行原文压成一行，换行留可见标记，方便在报告里核对位置。"""
+    s = s.replace("\r", "").replace("\n", " ⏎ ").replace("\t", " ")
+    return re.sub(r"\s{2,}", " ", s).strip()
+
+
+def _trim_side(s: str, budget: int, keep_tail: bool) -> str:
+    """侧边原文超预算时，保留贴近命中值的那一端。"""
+    if budget <= 0:
+        return ""
+    if len(s) <= budget:
+        return s
+    if budget == 1:
+        return "…"
+    if keep_tail:            # 左邻：要的是紧挨着命中值的末尾
+        return "…" + s[-(budget - 1):]
+    return s[:budget - 1] + "…"   # 右邻：要的是紧挨着命中值的开头
+
+
+def _trim_hit(s: str, budget: int) -> str:
+    """命中值自身超长时留头尾，中间显式写出省略了多少字符。"""
+    if len(s) <= budget:
+        return s
+    inner = max(20, budget - 20)   # 给 "…（省略 N 字符）…" 留位
+    head = inner * 3 // 5
+    tail = inner - head
+    omitted = len(s) - head - tail
+    return f"{s[:head]}…（省略 {omitted} 字符）…{s[-tail:]}"
+
+
+def context_parts(text: str, start: int, end: int, window: int = 96,
+                  max_len: int = 600) -> tuple[str, str, str]:
+    """把命中位置拆成 (命中前原文, 命中值原文, 命中后原文)，均已压平。
+
+    旧实现把三段拼成一个长串、再用「留头 1/3 + 留尾 2/3」压到 max_len。
+    命中值一旦比 max_len 长（完整 PEM 私钥压平后 1.7KB），它恰好落在中间，
+    会被两头截断全部吃掉：报告「原文」里只剩上一条密钥的尾巴和下张证书的
+    开头，看起来和「命中值」完全是两段东西。这里改成按段分配预算，命中值
+    优先且始终可见，前后文各占余量的一半。
+    """
+    radius = max(window, 200)
+    before = _flatten(text[max(0, start - radius):start])
+    hit = _flatten(text[start:min(end, len(text))])
+    after = _flatten(text[end:min(len(text), end + radius)])
+
+    hit_shown = _trim_hit(hit, max(80, int(max_len * 0.55)))
+    # 4 = 两个空格 + 一对 ⟦⟧ 标记，保证拼回来不超过 max_len
+    rest = max(0, max_len - len(hit_shown) - 4)
+    left_budget, right_budget = rest // 2, rest - rest // 2
+    before_shown = _trim_side(before, left_budget, keep_tail=True)
+    after_shown = _trim_side(after, right_budget, keep_tail=False)
+    # 一侧没用满就把余量让给另一侧，别白白浪费展示窗口
+    spare_left = left_budget - len(before_shown)
+    spare_right = right_budget - len(after_shown)
+    if spare_left and len(after) > len(after_shown):
+        after_shown = _trim_side(after, right_budget + spare_left, keep_tail=False)
+    elif spare_right and len(before) > len(before_shown):
+        before_shown = _trim_side(before, left_budget + spare_right, keep_tail=True)
+    return before_shown, hit_shown, after_shown
+
+
+def join_context(parts: tuple[str, str, str]) -> str:
+    """把三段拼成纯文本上下文，命中值用 ⟦⟧ 显式圈出（JSON/CSV/控制台可用）。"""
+    before, hit, after = parts
+    return f"{before} {HIT_OPEN}{hit}{HIT_CLOSE} {after}".strip()
+
+
+def redact_context_parts(parts: tuple[str, str, str]) -> tuple[str, str, str]:
+    """脱敏三段上下文，且保持 ⟦⟧ 边界标记可用。
+
+    整段 redact 会把标记吃掉；而三段各留 8 字符又会让「原文」里的命中值比
+    「命中值」栏露得还多。所以命中值与 value 同口径（前 4 后 4），两侧各留 8。
+    """
+    before, hit, after = parts
+    return redact(before, 8), redact(hit, 4), redact(after, 8)
+
+
+def extract_context(text: str, start: int, end: int, window: int = 96,
+                    max_len: int = 600) -> str:
+    """截取命中前后的原文，压成一行，命中值用 ⟦ ⟧ 圈出，供人工复核。
+
+    展示半径与判定半径刻意分开：`context_window` 用于关键词判定，必须窄
+    （防跨字段串味）；展示则至少取 200 字符，且命中值本身始终可见——
+    否则复核时只能对着几行无关的邻居字符串猜这个值到底从哪来。
+    """
+    return join_context(context_parts(text, start, end, window, max_len))
 
 
 _FIELD_SEP_RE = re.compile(r"[,;{}\[\]]")
 _JSON_KEY_IN_TEXT_RE = re.compile(r"""["'][A-Za-z_][\w.\-]{0,48}["']\s*:""")
+
+
+@lru_cache(maxsize=512)
+def _keyword_matcher(keywords: tuple[str, ...], word_boundary: bool):
+    """把关键词表编译成一个交替正则，避免每个候选都 re.escape + re.search 一遍。
+
+    返回 (正则 或 None, 小写词 -> 原始词)。逐词 re.search 在 17.8MB 日志上
+    会被调用几十万次，实测占 detect 总耗时的四分之一。
+    """
+    mapping = {k.lower(): k for k in keywords if k}
+    if not word_boundary:
+        return None, mapping
+    parts = []
+    for kw in keywords:
+        if not kw:
+            continue
+        # 短词（tel / to / id）用子串匹配会命中 hotel / into / device_id
+        if kw.isascii() and kw.isalpha():
+            parts.append(rf"(?<![a-z0-9_]){re.escape(kw)}(?![a-z0-9_])")
+        else:
+            parts.append(re.escape(kw))
+    if not parts:
+        return None, mapping
+    return re.compile("|".join(parts)), mapping
 
 
 def context_hit(text: str, start: int, end: int, keywords: tuple[str, ...], window: int = 96,
@@ -452,18 +657,17 @@ def context_hit(text: str, start: int, end: int, keywords: tuple[str, ...], wind
     # 只在结构化 JSON（"key": value）里收窄到当前字段。自由文本如
     # `Using device triplet: PK=..., DN=..., DS=...` 的三元组语境本来就跨好几个
     # 逗号片段，一刀切会把真实召回砍掉——所以按是否出现引号键名来区分。
-    if field_scoped and _JSON_KEY_IN_TEXT_RE.search(text[lo:hi]):
+    if field_scoped and _JSON_KEY_IN_TEXT_RE.search(text, lo, hi):
         left = _FIELD_SEP_RE.split(left)[-1]
         right = _FIELD_SEP_RE.split(right)[0]
     # 用空格拼接左右两段，避免左段末尾与右段开头意外连成一个假词。
     piece = (left + " " + right).lower()
+    rx, mapping = _keyword_matcher(tuple(keywords), word_boundary)
+    if rx is not None:
+        m = rx.search(piece)
+        return mapping.get(m.group(0)) if m else None
     for kw in keywords:
-        # 短词（tel / to / id）用子串匹配会命中 hotel / into / device_id，
-        # 这种假提权比漏报更难在报告里发现。开启 context_word 的规则改走词边界。
-        if word_boundary and kw.isascii() and kw.isalpha():
-            if re.search(rf"(?<![a-z0-9_]){re.escape(kw)}(?![a-z0-9_])", piece):
-                return kw
-        elif kw in piece:
+        if kw in piece:
             return kw
     return None
 
@@ -497,6 +701,19 @@ _JSON_KEY_RE = re.compile(r"""["']?[A-Za-z_][\w.\-]{0,48}["']?\s*:\s*$""")
 _NUMERIC_ZH_RE = re.compile(r"数|量|大小|字节|长度|计数|总数|时间|戳|尺寸|容量|耗时|毫秒")
 
 
+_SEG_CHARS = ",;{}[]\n"
+
+
+def last_segment(s: str) -> str:
+    """取最后一个字段分隔符之后的部分。rfind 比 re.split 快一个量级。"""
+    cut = -1
+    for ch in _SEG_CHARS:
+        pos = s.rfind(ch)
+        if pos > cut:
+            cut = pos
+    return s[cut + 1:]
+
+
 def field_key(text: str, start: int, window: int = 64) -> str | None:
     """取命中值左侧最近的字段键名，JSON / logfmt / YAML 都认。
 
@@ -504,8 +721,7 @@ def field_key(text: str, start: int, window: int = 64) -> str | None:
     """
     line_start = text.rfind("\n", 0, start) + 1
     left = text[max(line_start, start - window):start]
-    seg = re.split(r"[,;{}\[\]\n]", left)[-1]
-    m = _FIELD_KEY_RE.search(seg)
+    m = _FIELD_KEY_RE.search(last_segment(left))
     return m.group(1) if m else None
 
 
@@ -520,7 +736,7 @@ def numeric_field_hit(text: str, start: int, end: int, window: int = 96) -> bool
     """
     line_start = text.rfind("\n", 0, start) + 1
     left = text[max(line_start, start - window):start]
-    seg = re.split(r"[,;{}\[\]\n]", left)[-1]
+    seg = last_segment(left)
     if _PHONE_HINT_RE.search(seg):
         return False
     if _NUMERIC_ZH_RE.search(seg):

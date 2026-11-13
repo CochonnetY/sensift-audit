@@ -38,6 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-m", "--min-confidence", type=float, default=0.55, help="置信度阈值（默认 0.55）")
     p.add_argument("--include-binary", action="store_true", help="扫描二进制（误报会增多）")
     p.add_argument("--no-pcap", action="store_true", help="不解析抓包（默认用 tshark 抽明文）")
+    p.add_argument("--no-container", action="store_true",
+                   help="不拆容器（默认扫 APK/JAR/IPA/Office/zip/tar/gz/SQLite）")
     p.add_argument("--verify-local", action="store_true", help="离线验证：有效期 / 结构 / 过期，不联网")
     p.add_argument("--verify-online", action="store_true", help="在线验证，需授权端点")
     p.add_argument("--verify-config", help="验证配置 JSON")
@@ -53,6 +55,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-q", "--quiet", action="store_true", help="只输出一行摘要")
     p.add_argument("-V", "--version", action="version", version=f"senscan {__version__}")
     return p
+
+
+def _print_diagnostics(result) -> None:
+    """零命中时给出「为什么」，别让用户对着 0 猜。
+
+    最常见的三种 0 命中：路径根本不存在（已在扫描前抛错）、文件被判为二进制
+    跳过、容器里没有可扫文本条目。以前这些原因只写进 stats.skipped，界面上
+    什么都看不到，看起来就像「扫描器坏了」。
+    """
+    stats = result.stats
+    skipped = stats.skipped
+    if result.findings and not skipped:
+        return
+    if skipped:
+        print()
+        print(f"⚠ 跳过 {len(skipped)} 项（前 {min(6, len(skipped))} 条）：")
+        for line in skipped[:6]:
+            print(f"    · {line}")
+        if stats.container_truncated:
+            print("    · 提示：容器解包预算用尽，可拆出目标目录后再单独扫描")
+    if not result.findings:
+        print()
+        if stats.files_scanned == 0:
+            print("结果为空：没有任何文件被实际扫描（原因见上）。")
+        else:
+            print(f"结果为空：已扫 {stats.files_scanned} 文件 / {stats.container_entries} 条目，"
+                  "未发现达到阈值的实体；可降低 -m 阈值或用 --include-binary 复核。")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             include_binary=args.include_binary,
             max_file_mb=args.max_file_mb,
             enable_pcap=not args.no_pcap,
+            enable_container=not args.no_container,
             verify_config=verify_config,
         )
     except FileNotFoundError as exc:
@@ -128,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(result.findings)} findings, {result.stats.files_scanned} files, {result.duration_ms} ms")
     else:
         print(report.render_console(result, top=args.top, redact=args.redact))
+        _print_diagnostics(result)
 
     if not args.no_report:
         try:

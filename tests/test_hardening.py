@@ -360,5 +360,123 @@ class TestChineseKeyNames(unittest.TestCase):
                          ["IOT_PRODUCT_KEY"])
 
 
+class TestLiteralPrefilter(unittest.TestCase):
+    """字面量预筛只该省时间，不该改结果。
+
+    detect() 在扫全文之前会先判断「这条规则的关键字在不在文本里」，不在就整条
+    跳过。一旦某个推导出的字面量其实不是必需的，就会静默漏报——所以这里用
+    「规则命中 ⇒ 字面量必定出现」把这条不变量锁死。
+    """
+
+    SAMPLES = (
+        "imsi=460001234567890", "imei=353418074508110", "password=abc12345",
+        "密码:Passw0rd!2024", "账号密码：Abc123456",
+        "device_secret:KD8SVN2LQ9ZX4WP7RM3BT6YC1FH5NJ",
+        "设备密钥＝KD8SVN2LQ9ZX4WP7RM3BT6YC1FH5NJ",
+        "token=abcdef1234567890abcdef",
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc123def456ghi",
+        "MAC:44-72-AC-FE-C3-D5",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----",
+        "redis://user:pass@10.0.0.1:6379/0",
+        "https://b.s3.amazonaws.com/k?X-Amz-Signature=abc123def456",
+        "https://c.cos.ap-shanghai.myqcloud.com/a?q-sign-algorithm=sha1&q-ak=AKID123",
+        "手机号:13912345678", "邮箱:admin@example.com", "otp: 384921",
+        "序列号:SN2024AB1234", "serial_no=SN2024AB1234",
+        "蓝牙密钥:00112233445566778899aabbccddeeff",
+        "产品密钥:a1zk9qm2xv7bn4lp8tc",
+        "PK=a1zk9qm2xv7bn4lp8tc, DN=devgw0331kb7yt2rs9qm, DS=kd8svn2lq9zx4wp7rm3bt6yc1fh5nj",
+        "ghp_" + "a" * 36, "AKIA" + "A" * 16, "sk_live_" + "a" * 24,
+        "xoxb-123-456-abcdefghij", "广告标识:550e8400-e29b-41d4-a716-446655440000",
+        '{"api_key":"AIzaSyD-1234567890abcdefghijklmnopqrstu","phone":"13912345678"}',
+    )
+
+    def test_literal_is_necessary_for_every_match(self):
+        from senscan import detectors as D
+        from senscan.rules import RULES
+
+        texts = list(self.SAMPLES)
+        demo = Path(__file__).resolve().parents[1] / "demo" / "samples"
+        for p in demo.rglob("*"):
+            if p.is_file():
+                try:
+                    texts.append(U.read_text(p)[0])
+                except OSError:
+                    continue
+
+        for rule in RULES:
+            lits = D._must_literals(rule)
+            if not lits:
+                continue
+            for text in texts:
+                low = text.lower()
+                for m in D._compiled(rule).finditer(text):
+                    with self.subTest(rule=rule.id, hit=m.group(0)[:40]):
+                        self.assertTrue(
+                            any(l in low for l in lits),
+                            f"{rule.id} 的字面量 {sorted(lits)} 不是必需的，预筛会漏报",
+                        )
+
+    def test_prefilter_keeps_identical_findings(self):
+        from senscan import detectors as D
+
+        demo = Path(__file__).resolve().parents[1] / "demo" / "samples"
+        files = [p for p in demo.rglob("*") if p.is_file()]
+
+        def collect():
+            out = []
+            for p in files:
+                try:
+                    text, _ = U.read_text(p)
+                except OSError:
+                    continue
+                for f in D.detect(text, str(p)):
+                    out.append((f.entity, f.value, f.validation, round(f.confidence, 3), f.line))
+            return sorted(out)
+
+        with patch.object(D, "_must_literals", lambda rule: frozenset()):
+            baseline = collect()
+        self.assertEqual(collect(), baseline, "预筛改变了检测结果")
+
+    def test_must_literals_cover_most_rules(self):
+        from senscan import detectors as D
+        from senscan.rules import RULES
+
+        covered = [r for r in RULES if D._must_literals(r)]
+        # 剩下的是纯形态规则（MAC / 身份证 / 邮箱 / 裸 IMEI），本来就没有关键字
+        self.assertGreaterEqual(len(covered), 55, f"预筛覆盖率下降: {len(covered)}/{len(RULES)}")
+
+
+class TestWebUiPortGuard(unittest.TestCase):
+    """回归：8777 上两个 ui 进程并存时，页面是新版、请求却落到 11/10 的旧进程，
+    「拆解容器」等勾选静默失效，看板显示 0 文件 / 0 命中。
+    """
+
+    def test_windows_disables_reuse_address(self):
+        import sys
+        self.assertEqual(webui.Server.allow_reuse_address, sys.platform != "win32")
+
+    def test_start_refuses_occupied_port(self):
+        import contextlib
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            s.listen(1)
+            port = s.getsockname()[1]
+            saved = (webui._PORT, webui._TOKEN, webui._AUDIT_PATH)
+            try:
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    rc = webui.main(["--port", str(port), "--no-browser"])
+                self.assertEqual(rc, 2)
+                self.assertIn("已被另一个进程占用", err.getvalue())
+                self.assertIn(str(port), err.getvalue())
+            finally:
+                webui._PORT, webui._TOKEN, webui._AUDIT_PATH = saved
+
+    def test_backend_fingerprint_exists(self):
+        # 前端靠 /api/ping 判断后端是不是启动时加载的新代码
+        self.assertTrue(webui._STARTED_AT)
+        self.assertIsInstance(webui._listener_pids(1), list)
+
+
 if __name__ == "__main__":
     unittest.main()

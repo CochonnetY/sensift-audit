@@ -56,7 +56,7 @@ PII_RULES: tuple[Rule, ...] = (
     Rule(
         id="bank-card",
         entity="BANK_CARD",
-        pattern=r"(?<!\d)(\d{16,19}|\d{15})(?!\d)",
+        pattern=r"(?<![\d.])(\d{16,19}|\d{15})(?![\d.])",
         risk=R.HIGH,
         base_confidence=0.6,
         category=PII,
@@ -75,7 +75,12 @@ PII_RULES: tuple[Rule, ...] = (
         base_confidence=0.52,
         category=PII,
         validators=("email",),
-        context_keywords=("email", "mail", "邮箱", "收件人", "user", "account", "to", "from"),
+        # 只认「邮箱字段」语义。旧版含 to / from / user / mail 四个泛词，
+        # 在 .so 抽串里几乎必然命中（"to"/"from" 满地都是，mailing list 里
+        # 还有 mail），把 0.52 拉到 0.76 越阈，报出一堆开源库署名邮箱。
+        context_keywords=("email", "e-mail", "mail_to", "mailbox",
+                          "邮箱", "邮件地址", "收件人", "发件人",
+                          "sender", "recipient"),
         remediation=_PII_REMEDIATION,
         note="邮箱地址；TLD 必须为字母，排除 IP/端口等伪邮箱",
     ),

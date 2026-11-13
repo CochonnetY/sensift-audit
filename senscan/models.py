@@ -126,6 +126,9 @@ class Finding:
     line: int
     column: int
     context: str
+    # (命中前原文, 命中值原文, 命中后原文)，供报告层高亮命中值；纯文本 context
+    # 里的 ⟦⟧ 标记是给 JSON/CSV 用的降级展示。旧报告没有这个字段时按 context 渲染。
+    context_parts: tuple[str, str, str] | None = None
     category: str = CREDENTIAL
     validation: str = VALID_FORMAT
     remediation: str = ""
@@ -177,5 +180,10 @@ class Finding:
             "remediation": self.remediation,
             "reasons": list(self.reasons),
             "context": self.context,
+            **({"context_parts": {
+                "before": self.context_parts[0],
+                "hit": self.context_parts[1],
+                "after": self.context_parts[2],
+            }} if self.context_parts else {}),
             **({"extra": self.extra} if self.extra else {}),
         }

@@ -13,7 +13,11 @@ from __future__ import annotations
 import argparse
 import hmac
 import json
+import os
 import secrets
+import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import traceback
@@ -37,6 +41,8 @@ _WEB_DIR = Path(__file__).with_name("web")
 _PORT = 8777
 _TOKEN = ""
 _AUDIT_PATH = Path("senscan-verify-audit.jsonl")
+# 进程启动瞬间定格；前端据此判断「页面是新的，但请求落到了旧进程上」。
+_STARTED_AT = datetime.now().isoformat(timespec="seconds")
 _FORMATS = {
     "json": ("application/json; charset=utf-8", report.write_json),
     "csv": ("text/csv; charset=utf-8", report.write_csv),
@@ -160,6 +166,7 @@ def _run_scan(job: Job, opts: dict[str, Any]) -> None:
             include_binary=bool(opts.get("include_binary")),
             max_file_mb=int(opts.get("max_file_mb", 512)),
             enable_pcap=not bool(opts.get("no_pcap")),
+            enable_container=not bool(opts.get("no_container")),
             verify_config=cfg,
             on_progress=on_progress,
         )
@@ -182,7 +189,29 @@ def _run_scan(job: Job, opts: dict[str, Any]) -> None:
         traceback.print_exc()
 
 
+def _preflight(opts: dict[str, Any]) -> None:
+    """扫描前先验证路径，缺文件当场报错。
+
+    以前路径写错（文件名改了、目录删了）会等到后台线程里才炸，接口照样返回
+    job_id，页面一路轮询到 error，用户只看到一张全 0 的看板——分不清是
+    「扫了没发现」还是「根本没扫」。这里直接 400，前端把原因显示在路径框下面。
+    """
+    raw = [str(x).strip() for x in (opts.get("paths") or []) if str(x).strip()]
+    if not raw:
+        raise ValueError("请至少填写一个待扫描路径")
+    missing = [p for p in raw if not Path(p).expanduser().exists()]
+    if missing:
+        shown = "；".join(missing[:3])
+        more = f" 等 {len(missing)} 个" if len(missing) > 3 else ""
+        raise FileNotFoundError(f"路径不存在：{shown}{more}")
+    empty = [p for p in raw
+             if Path(p).expanduser().is_file() and Path(p).expanduser().stat().st_size == 0]
+    if empty:
+        raise ValueError(f"文件为空（0 字节）：{'；'.join(empty[:3])}")
+
+
 def start_scan(opts: dict[str, Any]) -> dict[str, Any]:
+    _preflight(opts)
     jid = secrets.token_hex(6)
     job = Job(id=jid, options=opts)
     with _LOCK:
@@ -352,6 +381,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/state":
                 self._json(state_payload())
+            elif u.path == "/api/ping":
+                # 能力指纹：老进程没有这个接口，前端会直接提示重启工作台。
+                self._json({"version": __version__, "pid": os.getpid(),
+                            "started_at": _STARTED_AT, "rules": len(RULES),
+                            "container": True, "preflight": True})
             elif u.path == "/api/job":
                 job = STATE["jobs"].get(q.get("id", ""))
                 if job is None:
@@ -420,7 +454,32 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # Windows 下 SO_REUSEADDR 会让多个进程「同时」监听同一端口，且连接随机分给
+    # 其中一个。于是新页面配旧后端：勾选看起来生效，实际请求被旧进程接走。
+    # 只在 Windows 关掉它；Unix 保留以便快速重启（那边不会双绑定 LISTEN）。
+    allow_reuse_address = sys.platform != "win32"
+
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.4)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _listener_pids(port: int) -> list[str]:
+    """尽力找出占用端口的 PID，只用于错误信息；查不到就静默省略。"""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True,
+                                 text=True, timeout=2, encoding="utf-8",
+                                 errors="ignore").stdout
+            pids = {p[4] for p in (ln.split() for ln in out.splitlines())
+                    if len(p) >= 5 and p[0] == "TCP" and p[3] == "LISTENING"
+                    and p[1].endswith(f":{port}") and p[4].isdigit()}
+            return sorted(pids)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return []
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -435,8 +494,28 @@ def main(argv: list[str] | None = None) -> int:
     _TOKEN = secrets.token_urlsafe(28)
     _AUDIT_PATH = Path(args.audit)
     url = f"http://127.0.0.1:{_PORT}/"
-    server = Server(("127.0.0.1", _PORT), Handler)
+
+    if _port_in_use(_PORT):
+        pids = _listener_pids(_PORT)
+        hint = f"（PID {', '.join(pids)}）" if pids else ""
+        print(f"错误：端口 {_PORT} 已被另一个进程占用{hint}。", file=sys.stderr)
+        print("很可能是以前启动的 senscan 工作台还在跑。此时请求会被它接走，"
+              "出现「页面是新版、后端是旧版」——勾选不生效、扫描 0 结果。", file=sys.stderr)
+        print(f"换端口： python -m senscan ui --port {_PORT + 1}", file=sys.stderr)
+        if pids:
+            print("或先结束旧进程（逐条执行）：", file=sys.stderr)
+            for p in pids:
+                print(f"  taskkill /PID {p} /F", file=sys.stderr)
+        return 2
+
+    try:
+        server = Server(("127.0.0.1", _PORT), Handler)
+    except OSError as exc:
+        print(f"错误：无法绑定 {url}（{exc}）；端口可能刚释放，稍等几秒或换 --port。",
+              file=sys.stderr)
+        return 2
     print(f"senscan {__version__} → {url}")
+    print(f"进程 PID {os.getpid()} · 启动于 {_STARTED_AT} · 容器拆解可用")
     print("仅监听本机 · Ctrl+C 结束 · 审计：", _AUDIT_PATH)
     if not args.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

@@ -94,7 +94,12 @@ def _payload(result: ScanResult, redact: bool) -> dict:
         d = f.to_dict()
         if redact:
             d["value"] = U.redact(f.value, 4)
-            d["context"] = U.redact(f.context, 8)
+            if f.context_parts:
+                parts = U.redact_context_parts(f.context_parts)
+                d["context"] = U.join_context(parts)
+                d["context_parts"] = dict(zip(("before", "hit", "after"), parts))
+            else:
+                d["context"] = U.redact(f.context, 8)
         findings.append(d)
     return {
         "tool": "senscan",
@@ -118,6 +123,12 @@ def _payload(result: ScanResult, redact: bool) -> dict:
             "suppressed_no_context": result.stats.suppressed_context,
             "suppressed_low_confidence": result.stats.suppressed_threshold,
             "whitelisted": result.stats.whitelisted,
+            # 容器扫描的可解释性：扫了几个条目、跳过了什么、预算有没有用尽。
+            # 没有这几项，用户看到 0 命中时无法区分「没扫」和「扫了没发现」。
+            "container_entries": result.stats.container_entries,
+            "locale_entries": result.stats.locale_entries,
+            "container_truncated": result.stats.container_truncated,
+            "skipped": list(result.stats.skipped[:200]),
         },
         "summary": {
             "total": len(findings),
@@ -171,6 +182,15 @@ def _csv_safe(value: Any) -> Any:
     return value
 
 
+def _report_context(f: Finding, redact: bool) -> str:
+    """CSV / 纯文本渠道的上下文：脱敏后仍保留 ⟦⟧ 命中边界。"""
+    if not redact:
+        return f.context
+    if f.context_parts:
+        return U.join_context(U.redact_context_parts(f.context_parts))
+    return U.redact(f.context, 8)
+
+
 def write_csv(result: ScanResult, path: Path, redact: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
@@ -194,7 +214,7 @@ def write_csv(result: ScanResult, path: Path, redact: bool = False) -> None:
                 f.column,
                 f.remediation,
                 "; ".join(f.reasons),
-                U.redact(f.context, 8) if redact else f.context,
+                _report_context(f, redact),
             ]
             w.writerow([_csv_safe(x) for x in row])
 

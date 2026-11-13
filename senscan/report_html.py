@@ -63,7 +63,14 @@ def _value_display(f: Finding, redact: bool) -> str:
 
 
 def _rel(path: str, bases: list[str]) -> str:
-    """尽量显示相对路径，报告里全是绝对路径不利于阅读。"""
+    """尽量显示相对路径，报告里全是绝对路径不利于阅读。
+
+    容器内条目形如 `app.apk!assets/config.json`：只对包本身做相对化，
+    `!` 后面的内部路径保持原样，否则会被 Windows 分隔符改得面目全非。
+    """
+    outer, sep, inner = path.partition("!")
+    if sep:
+        return f"{_rel(outer, bases)}!{inner}"
     try:
         common = os.path.commonpath([path, *bases]) if bases else ""
     except ValueError:
@@ -226,6 +233,23 @@ def _verify_panel(result: ScanResult) -> str:
     )
 
 
+def _context_html(f: Finding, redact: bool) -> str:
+    """原文三段渲染：命中值高亮，前后文常规色。
+
+    以前「原文」栏是一个被截断的长串，长私钥恰好被切在中间，评审人看到的是
+    上一条密钥的尾巴和下张证书的头，会以为命中的是另一段内容。现在把命中值
+    明确标出来，一眼能确认它确实出自这段原文。
+    """
+    parts = f.context_parts
+    if not parts or len(parts) != 3:
+        return _e(U.redact(f.context, 8) if redact else f.context)
+    before, hit, after = U.redact_context_parts(parts) if redact else parts
+    return (
+        f'{_e(before)} <mark class="hit" title="命中值">{_e(hit)}</mark> '
+        f'{_e(after)}'
+    )
+
+
 def _liveness_options(result: ScanResult) -> str:
     return "".join(
         f'<option value="{_e(k)}">{_e(VER.LIVENESS_LABEL.get(k, k))} ({n})</option>'
@@ -240,6 +264,8 @@ def _rows(result: ScanResult, redact: bool, bases: list[str]) -> str:
         search = " ".join([f.entity, f.risk.value, f.value, f.context, Path(f.source).name]).lower()
         reasons = "".join(f"<li>{_e(r)}</li>" for r in f.reasons)
         ctx = U.redact(f.context, 8) if redact else f.context
+        # 列表/悬浮提示用纯文本，⟦⟧ 边界标记只在详情和 JSON/CSV 里保留
+        ctx_plain = ctx.replace(U.HIT_OPEN, "").replace(U.HIT_CLOSE, "")
         trip_chip = '<span class="trip-chip">三元组</span>' if f.extra.get("iot_triplet") else ""
         v = f.extra.get("verification")
         vblock = ""
@@ -270,10 +296,11 @@ def _rows(result: ScanResult, redact: bool, bases: list[str]) -> str:
             f'<div class="dbody"><p class="dlabel">判定依据</p><ul class="reasons">{reasons}</ul>'
             + vblock +
             f'<p class="dlabel">建议</p><p>{_e(f.remediation or "确认是否属敏感数据")}</p>'
-            f'<p class="dlabel">原文</p><p class="ctxfull">{_e(ctx)}</p>'
+            f'<p class="dlabel">原文（高亮部分＝命中值）</p>'
+            f'<p class="ctxfull">{_context_html(f, redact)}</p>'
             f'<p class="dim">规则 <span class="mono">{_e(f.rule_id)}</span> · 归一化值 '
             f'<code>{_e(_shorten(f.normalized or f.value, 64))}</code></p></div></details></td>'
-            f'<td class="ctx ellip" title="{_e(ctx)}">{_e(_shorten(ctx, 140))}</td>'
+            f'<td class="ctx ellip" title="{_e(ctx_plain)}">{_e(_shorten(ctx_plain, 240))}</td>'
             f"</tr>"
         )
     return "".join(out)
@@ -418,7 +445,7 @@ tbody tr:hover{background:#fafcff}
   background:#f8f9fb;padding:1px 5px;border-radius:3px;overflow-wrap:anywhere;word-break:break-all}
 td.val{max-width:400px}
 .ellip{overflow:hidden;text-overflow:ellipsis}
-td.ctx{max-width:280px;color:#6b7280;font-size:12px}
+td.ctx{max-width:360px;color:#6b7280;font-size:12px}
 details{margin-top:5px}
 details summary{font-size:11.5px;color:#2563eb;cursor:pointer;list-style:none}
 details summary::-webkit-details-marker{display:none}
@@ -430,6 +457,8 @@ details[open] summary::before{content:"▾ "}
 .reasons{margin:2px 0 0 16px}
 .reasons li{font-size:12px;color:#4b5563}
 .ctxfull{font-size:11.5px;color:#6b7280;overflow-wrap:anywhere;word-break:break-all}
+mark.hit{background:#fff2b8;color:#7c4a03;padding:0 2px;border-radius:2px;
+  box-shadow:inset 0 0 0 1px #f0d383}
 .empty{color:#9ca3af;font-size:13px;padding:8px 0}
 .hint{font-size:12px;color:#92400e;background:#fffbeb;border-radius:6px;padding:8px 12px;margin-top:10px}
 .spread li{font-size:12.5px;color:#4b5563;margin:6px 0;overflow-wrap:anywhere}
@@ -644,6 +673,7 @@ def write_html(result: ScanResult, path: Path, redact: bool = False) -> None:
       <li><b>已校验</b>：校验和/结构解析通过（Luhn、GB 11643、JWT、PEM、Basic Auth）。<b>上下文</b>：有字段名佐证，建议抽查。<b>仅格式</b>：按 P1/P2 处理。手机号、IMEI/IMSI、MAC、LTK 没有校验位，最高「上下文」。</li>
       <li>数值字段、订单号、无字段名的裸数字默认不报，同行相邻字段不互相提权；官方示例凭据按占位符丢弃。调低阈值可捞回裸线索。</li>
       <li><b>证据</b>回答"是不是真的"，<b>存活</b>回答"还能不能用"。MAC、IMEI、序列号等身份标识不是凭据，没有"能否使用"的概念，存活列显示「—」；在线验证默认关闭，网络失败记「未验证」，<b>不等同「已失效」</b>。</li>
+      <li><b>原文</b>栏中黄色高亮的即命中值，两侧是它在文件里的前后文；命中值过长时中间会写明省略字符数。纯文本报告（JSON / CSV）里用 <code>⟦ ⟧</code> 圈出同一段。</li>
       <li>「缺上下文」是主动挡掉的高误报类型（裸 UUID、裸 hash 等），数字大属正常。</li>
       <li>pcap 的「位置」为帧号；TLS 明文以外的正文不在扫描范围内。</li>
       <li>规则来源：{_rule_source_stats()}。gitleaks 为 MIT 许可，正则已做 Python 兼容化并补中文语境边界。</li>

@@ -56,11 +56,15 @@ VALIDATORS: dict[str, Callable[[str], bool]] = {
     "serial_no": U.serial_no_ok,
     "entropy": lambda v: U.high_entropy(v),
     "not_placeholder": lambda v: not U.looks_placeholder(v),
+    "not_markup_literal": U.not_markup_literal,
+    "plausible_secret": U.plausible_secret_value,
+    "key_material_shape": U.key_material_shape,
 }
 
 # 需要原文与命中位置的硬校验：纯数字类型靠字段语义反证，而不是靠值本身。
 CONTEXT_VALIDATORS: dict[str, Callable[[str, str, int, int], bool]] = {
     "not_numeric_field": lambda v, text, start, end: not U.numeric_field_hit(text, start, end),
+    "pem_head_body": lambda v, text, start, end: U.pem_head_has_body(text, end),
 }
 
 # 只有"数学/结构证据"才配称「已校验」。以下都只是形态过滤，一律不进这个集合：
@@ -84,7 +88,230 @@ def _compiled(rule: Rule) -> re.Pattern[str]:
     # 「密钥ghp_xxx」「令牌AKIA...」这类中文紧邻的前缀型凭据整体漏报。
     # 用局部 ASCII 标志把 \b 限定为 ASCII 词边界：中文与 ASCII 之间成立，
     # 而英文标识符内部（keyghp_）仍不成立——既补漏报又不放宽误报。
-    return re.compile(rule.pattern.replace(r"\b", _ASCII_WORD_BOUNDARY), rule.flags)
+    return re.compile(_ascii_boundary(rule.pattern), rule.flags)
+
+
+def _ascii_boundary(pattern: str) -> str:
+    return pattern.replace(r"\b", _ASCII_WORD_BOUNDARY)
+
+
+# ---------------------------------------------------------------- 字面量预筛
+#
+# 瓶颈不是某条正则写得差，而是 83 条规则各扫一遍全文：17.8MB 日志 = 1.5G
+# 次「位置 × 规则」。实测把规则合并成一条 alternation 反而更慢（Python 的
+# re 在交替时仍逐个分支尝试，且同位置还要回退重试）。
+#
+# 真正有效的是「这条规则的关键字全文都不存在，就别扫了」：一次 text.lower()
+# 之后用 memchr 级的子串查找，几百毫秒就能筛掉绝大部分规则——真实日志里
+# 绝大多数类型的密钥一条都不出现。
+#
+# 安全性完全取决于字面量「必然出现」。所以这里用保守的语法推导：只在能证明
+# 该片段必须出现在匹配结果里时才取用，遇到可选组、零宽断言、无法判定的结构
+# 一律放弃（返回空集 = 不筛，照常全扫）。
+
+_QUANT_AFTER = re.compile(r"[?*+]|\{\d+(?:,\d*)?\}")
+
+
+def _skip_class(s: str, i: int) -> int:
+    j = i + 1
+    while j < len(s):
+        if s[j] == "\\":
+            j += 2
+            continue
+        if s[j] == "]":
+            return j + 1
+        j += 1
+    return len(s)
+
+
+def _skip_quant(s: str, i: int) -> int:
+    m = _QUANT_AFTER.match(s, i)
+    return m.end() if m else i
+
+
+def _group_body(s: str, i: int) -> tuple[str | None, int]:
+    """i 指向 '('，返回 (组内表达式, 结束位置)。"""
+    depth = 0
+    j = i
+    while j < len(s):
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "[":
+            j = _skip_class(s, j)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                inner = s[i + 1:j]
+                for pre in ("?:", "?P<", "?i:", "?s:", "?m:", "?a:", "?u:"):
+                    if inner.startswith(pre):
+                        inner = inner[len(pre):]
+                        break
+                return inner, j + 1
+        j += 1
+    return None, len(s)
+
+
+def _split_top(s: str) -> list[str]:
+    """按顶层 | 切分，括号与字符类内部的 | 不算。"""
+    parts: list[str] = []
+    cur: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == "\\":
+            cur.append(s[i:i + 2])
+            i += 2
+            continue
+        if ch == "[":
+            j = _skip_class(s, i)
+            cur.append(s[i:j])
+            i = j
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+_LITERAL = re.compile(r"[A-Za-z0-9_]{3,}|[\u4e00-\u9fff]{2,}")
+_OPT_SEP = re.compile(r"\[([^\]]{1,12})\]\?")
+MAX_VARIANTS = 12
+MAX_LITERAL_LEN = 40
+
+
+def _is_literal_char(ch: str) -> bool:
+    # 下划线在正则里就是字面量本身（api_key / device_sn），必须算进字面量串
+    return ch.isalnum() or ch == "_" or "\u4e00" <= ch <= "\u9fff"
+
+
+def _sep_options(s: str, i: int) -> tuple[tuple[str, ...], int] | None:
+    """识别 `[_\\-]?` 这种「0 或 1 个字符」的分隔类，返回 (可选字符串, 结束位置)。
+
+    只处理可枚举的类：字符数 ≤3、无范围。`{0,4}` 这类多字符分隔一律放弃，
+    否则枚举不全，预筛会错杀。
+    """
+    m = _OPT_SEP.match(s, i)
+    if not m:
+        return None
+    body = m.group(1)
+    chars: list[str] = []
+    j = 0
+    while j < len(body):
+        ch = body[j]
+        if ch == "\\":
+            esc = body[j + 1:j + 2]
+            if not esc or esc.isalnum() or esc == "_":
+                return None            # \s / \d 之类：可能是制表符换行，不猜
+            chars.append(esc)
+            j += 2
+            continue
+        if ch.isalnum() and ch != "_":
+            return None                # a-z 这类范围不枚举
+        chars.append(ch)
+        j += 1
+    if not chars or len(chars) > 3:
+        return None
+    return tuple([""] + chars), m.end()
+
+
+def _expand(s: str, i: int, m: re.Match[str]) -> frozenset[str]:
+    """把 `api` + `[_\\-]?` + `key` 展开成 api / api_key / api-key。
+
+    单个 `api` 满日志都是（`/api/v1`），预筛等于没筛；展开成 `api_key` 之后
+    才真正具备选择性。
+    """
+    variants = {m.group(0).lower()}
+    end = m.end()
+    while len(variants) <= MAX_VARIANTS:
+        sep = _sep_options(s, end)
+        if sep is None:
+            break
+        opts, nxt = sep
+        tail = _LITERAL.match(s, nxt) if nxt < len(s) and _is_literal_char(s[nxt]) else None
+        if tail is None:
+            break
+        word = tail.group(0).lower()
+        variants = {v + sep_ch + word for v in variants for sep_ch in opts}
+        if any(len(v) > MAX_LITERAL_LEN for v in variants):
+            break
+        end = tail.end()
+    return frozenset(variants)
+
+
+def _branch_literals(s: str) -> frozenset[str] | None:
+    """单个分支里必然出现的一个字面量（找到就够，用于「任一命中则不跳过」）。"""
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "[":
+            i = _skip_class(s, i)
+            continue
+        if ch == "(":
+            look = s[i + 1:i + 4]
+            body, end = _group_body(s, i)
+            if look.startswith(("?=", "?!", "?<=", "?<!")):
+                i = end                     # 零宽断言：内容不必然出现
+                continue
+            quant = _QUANT_AFTER.match(s, end)
+            q = quant.group(0) if quant else ""
+            optional = q[:1] in ("?", "*") or q.startswith("{0")
+            if body is not None and not optional:
+                got = _lits(body)
+                if got:
+                    return got
+            i = _skip_quant(s, end)
+            continue
+        if _is_literal_char(ch):
+            m = _LITERAL.match(s, i)
+            if m:
+                got = _expand(s, i, m)
+                if got:
+                    return got
+            i += 1
+            continue
+        if ch in "?*+{":
+            i = _skip_quant(s, i)
+            continue
+        i += 1
+    return None
+
+
+def _lits(fragment: str) -> frozenset[str] | None:
+    acc: set[str] = set()
+    for branch in _split_top(fragment):
+        got = _branch_literals(branch)
+        if got is None:
+            return None
+        acc |= got
+    return frozenset(acc) if acc else None
+
+
+@lru_cache(maxsize=512)
+def _must_literals(rule: Rule) -> frozenset[str]:
+    """规则命中时必然出现在原文里的字面量；空集表示无法预筛。"""
+    try:
+        got = _lits(rule.pattern)
+    except Exception:            # 解析失败就退回全扫，绝不因为优化漏报
+        return frozenset()
+    return got or frozenset()
 
 
 # ---------------------------------------------------------------- 归一化
@@ -218,13 +445,89 @@ def _collapse_same_value(findings: list[Finding]) -> list[Finding]:
 # ---------------------------------------------------------------- 执行
 
 
+@lru_cache(maxsize=32768)
+def _validate(name: str, value: str) -> bool:
+    """校验器都是纯函数，同一值反复出现（同一 token 打满日志）时直接吃缓存。"""
+    fn = VALIDATORS.get(name)
+    return True if fn is None else fn(value)
+
+
 def _new_stats(stats: dict | None) -> dict:
     if stats is None:
         stats = {}
-    for key in ("candidates", "rejected", "rejected_context", "suppressed",
-                "suppressed_context", "suppressed_threshold"):
+    for key in ("candidates", "rejected", "rejected_context", "rejected_boundary",
+                "suppressed", "suppressed_context", "suppressed_threshold", "skipped_rules"):
         stats.setdefault(key, 0)
     return stats
+
+
+def _evaluate(rule: Rule, m: re.Match[str], text: str, stats: dict,
+              min_confidence: float,
+              strings_dump: bool = False) -> tuple[str, int, int, float, str | None, list[str]] | None:
+    """单条候选进判定，返回 (值, 起, 止, 分数, 上下文词, 理由)；被丢弃返回 None。"""
+    try:
+        raw = m.group(rule.group)
+        span_start, span_end = m.span(rule.group)
+    except IndexError:
+        return None
+    if not raw:
+        return None
+    # 二进制抽出来的文本里，每行是一条独立字符串，彼此没有任何语法关系。
+    # DEX 里 `SDCardRecordMonthQueryReq(productKey=` 正好是一条完整字符串，
+    # 若允许「值从下一行开始」，它就会和池子里的下一条串拼成假字段。
+    # 二进制抽出来的文本里，每行是一条独立字符串，彼此没有任何语法关系。
+    # 一条命中只要跨了行，就说明它把两条无关字符串拼成了一个「字段=值」——
+    # DEX 里 `SDCardRecordMonthQueryReq(productKey=` 是完整的一条串，
+    # OpenSSL 的 `Session-ID:` 和 `Session-ID-ctx:` 也是各自独立的串。
+    # 只有完整 PEM 块例外：它本身就可能作为一条带换行的字符串被编译进二进制。
+    if strings_dump and "\n" in m.group(0) and not raw.lstrip().startswith("-----BEGIN"):
+        stats["rejected"] += 1
+        stats["rejected_boundary"] += 1
+        return None
+    value = raw.strip().strip("\"'")
+    if rule.strip_whitespace:
+        # 串口日志按列宽硬折行，值被拆到多行；去掉空白还原原值。
+        value = re.sub(r"\s+", "", value)
+    # XML/HTML 里值后面紧跟标签（<w:t>密码:x</w:t>），切到首个 "<"，
+    # 否则标签名会被当成值的一部分写进报告。
+    if "<" in value:
+        value = value.split("<", 1)[0].rstrip()
+    if not value or len(value) < 4:
+        return None
+    if len(value) > rule.max_value_len:
+        value = value[: rule.max_value_len]
+
+    stats["candidates"] += 1
+
+    # 硬校验：任一不过即丢弃
+    for name in rule.validators:
+        if not _validate(name, value):
+            stats["rejected"] += 1
+            return None
+
+    for name in rule.context_validators:
+        fn = CONTEXT_VALIDATORS.get(name)
+        if fn is not None and not fn(value, text, span_start, span_end):
+            stats["rejected"] += 1
+            stats["rejected_context"] += 1
+            return None
+
+    ctx_kw = U.context_hit(text, span_start, span_end, rule.context_keywords,
+                           rule.context_window, word_boundary=rule.context_word)
+    if rule.context_required and not ctx_kw:
+        stats["suppressed"] += 1
+        stats["suppressed_context"] += 1
+        return None
+
+    bonus_hits = [n for n in rule.bonus_validators if VALIDATORS.get(n) and _validate(n, value)]
+    score, reasons = _score(rule, value, ctx_kw, bonus_hits)
+
+    if score < min_confidence:
+        stats["suppressed"] += 1
+        stats["suppressed_threshold"] += 1
+        return None
+
+    return value, span_start, span_end, score, ctx_kw, reasons
 
 
 def detect(
@@ -234,98 +537,70 @@ def detect(
     stats: dict | None = None,
     rules: tuple[Rule, ...] = RULES,
     line_offset: int = 0,
+    strings_dump: bool = False,
 ) -> list[Finding]:
-    """对单个文本源执行全部规则，返回已去重、已排序的发现项。"""
+    """对单个文本源执行全部规则，返回已去重、已排序的发现项。
+
+    strings_dump=True 用于「容器里抽出来的二进制串」：每行一条独立字符串，
+    因此不允许键值跨行拼接（详见 _evaluate）。
+    """
     stats = _new_stats(stats)
     line_index = U.build_line_index(text)
     kept: dict[tuple[str, str], Finding] = {}
 
+    def emit(rule: Rule, m: re.Match[str]) -> bool:
+        """评估并收下一条候选；返回 False 表示这条候选没结论。"""
+        got = _evaluate(rule, m, text, stats, min_confidence, strings_dump)
+        if got is None:
+            return False
+        value, span_start, span_end, score, ctx_kw, reasons = got
+
+        key = f"{rule.entity}:{_normalize(rule.entity, value)}"
+        existing = kept.get(key)
+        if existing is not None:
+            existing.occurrences += 1
+            if score > existing.confidence:
+                existing.confidence = score
+                existing.rule_id = rule.id
+                existing.reasons = tuple(reasons)
+                existing.validation = _validation(rule, ctx_kw)
+            return True
+
+        line_no, col = U.offset_to_line(line_index, span_start)
+        parts = U.context_parts(text, span_start, span_end, rule.context_window)
+        kept[key] = Finding(
+            entity=rule.entity,
+            value=value,
+            risk=rule.risk,
+            confidence=score,
+            rule_id=rule.id,
+            source=source,
+            offset=span_start,
+            line=line_no + line_offset,
+            column=col,
+            context=U.join_context(parts),
+            context_parts=parts,
+            category=rule.category or CREDENTIAL,
+            validation=_validation(rule, ctx_kw),
+            remediation=rule.remediation,
+            reasons=tuple(reasons),
+            normalized=_normalize(rule.entity, value),
+        )
+        return True
+
+    # 关键字全文都不存在的规则直接跳过：真实日志里绝大多数类型一条都不出现，
+    # 一次 lower() + 若干次子串查找就能省掉大部分全量扫描。
+    low: str | None = None
     for rule in rules:
-        rx = _compiled(rule)
-        for m in rx.finditer(text):
-            try:
-                raw = m.group(rule.group)
-                span_start, span_end = m.span(rule.group)
-            except IndexError:
+        must = _must_literals(rule)
+        if must:
+            if low is None:
+                low = text.lower()
+            if not any(lit in low for lit in must):
+                stats["skipped_rules"] += 1
                 continue
-            if not raw:
-                continue
-            value = raw.strip().strip("\"'")
-            if rule.strip_whitespace:
-                # 串口日志按列宽硬折行，值被拆到多行；去掉空白还原原值。
-                value = re.sub(r"\s+", "", value)
-            if not value or len(value) < 4:
-                continue
-            if len(value) > rule.max_value_len:
-                value = value[: rule.max_value_len]
-
-            stats["candidates"] += 1
-
-            # 硬校验：任一不过即丢弃
-            ok = True
-            for name in rule.validators:
-                fn = VALIDATORS.get(name)
-                if fn is not None and not fn(value):
-                    ok = False
-                    break
-            if not ok:
-                stats["rejected"] += 1
-                continue
-
-            for name in rule.context_validators:
-                fn = CONTEXT_VALIDATORS.get(name)
-                if fn is not None and not fn(value, text, span_start, span_end):
-                    ok = False
-                    break
-            if not ok:
-                stats["rejected"] += 1
-                stats["rejected_context"] += 1
-                continue
-
-            ctx_kw = U.context_hit(text, span_start, span_end, rule.context_keywords,
-                                   rule.context_window, word_boundary=rule.context_word)
-            if rule.context_required and not ctx_kw:
-                stats["suppressed"] += 1
-                stats["suppressed_context"] += 1
-                continue
-
-            bonus_hits = [n for n in rule.bonus_validators if VALIDATORS.get(n) and VALIDATORS[n](value)]
-            score, reasons = _score(rule, value, ctx_kw, bonus_hits)
-
-            if score < min_confidence:
-                stats["suppressed"] += 1
-                stats["suppressed_threshold"] += 1
-                continue
-
-            key = f"{rule.entity}:{_normalize(rule.entity, value)}"
-            existing = kept.get(key)
-            if existing is not None:
-                existing.occurrences += 1
-                if score > existing.confidence:
-                    existing.confidence = score
-                    existing.rule_id = rule.id
-                    existing.reasons = tuple(reasons)
-                    existing.validation = _validation(rule, ctx_kw)
-                continue
-
-            line_no, col = U.offset_to_line(line_index, span_start)
-            kept[key] = Finding(
-                entity=rule.entity,
-                value=value,
-                risk=rule.risk,
-                confidence=score,
-                rule_id=rule.id,
-                source=source,
-                offset=span_start,
-                line=line_no + line_offset,
-                column=col,
-                context=U.extract_context(text, span_start, span_end, rule.context_window),
-                category=rule.category or CREDENTIAL,
-                validation=_validation(rule, ctx_kw),
-                remediation=rule.remediation,
-                reasons=tuple(reasons),
-                normalized=_normalize(rule.entity, value),
-            )
+        for m in _compiled(rule).finditer(text):
+            emit(rule, m)
 
     findings = _drop_subsumed(_collapse_same_value(list(kept.values())))
     findings.sort(key=lambda f: (-f.risk_score, -f.confidence, f.source, f.line))

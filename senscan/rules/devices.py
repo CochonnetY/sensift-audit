@@ -108,7 +108,9 @@ DEVICE_RULES: tuple[Rule, ...] = (
     Rule(
         id="device-uuid-bare",
         entity="OAID",
-        pattern=r"\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
+        # `urn:uuid:edef8ba9-...` 是 RFC 4122 的命名空间 URN（Tika / MP4 元数据里
+        # 到处都是），不是设备标识。加固定长度回顾挡掉，不影响普通裸 UUID。
+        pattern=r"(?<!urn:uuid:)\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b",
         risk=R.MEDIUM,
         base_confidence=0.3,
         category=DEVICE,

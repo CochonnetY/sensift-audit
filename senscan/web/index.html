@@ -203,6 +203,8 @@ tr:last-child td{border-bottom:0}
 .dsec h5{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--faint);margin-bottom:7px}
 .dsec .val{font:12.5px ui-monospace,Consolas,monospace;background:#f6f8fc;border:1px solid var(--line2);
   border-radius:7px;padding:10px 12px;overflow-wrap:anywhere;word-break:break-all;max-height:170px;overflow:auto}
+.dsec .val mark.hit{background:#fff2b8;color:#7c4a03;padding:0 2px;border-radius:2px;
+  box-shadow:inset 0 0 0 1px #f0d383}
 .dsec ul{margin-left:17px}.dsec li{font-size:12.5px;color:var(--ink2);margin:3px 0}
 .dsec p{font-size:12.5px;color:var(--ink2);line-height:1.7}
 .kv{display:grid;grid-template-columns:92px 1fr;gap:6px 10px;font-size:12.5px}
@@ -259,6 +261,7 @@ tr:last-child td{border-bottom:0}
     </div>
     <div class="checks">
       <label class="chk" title="用 tshark 抽取明文载荷；TLS 正文无法扫描"><input type="checkbox" id="pcap" checked><span>解析抓包<span class="hint">仅明文，TLS 正文不可扫</span></span></label>
+      <label class="chk" title="拆开 APK/JAR/IPA/Office/压缩包/SQLite 再扫里面的内容"><input type="checkbox" id="container" checked><span>拆解容器<span class="hint">APK、Office、压缩包、SQLite</span></span></label>
       <label class="chk" title="固件产物可能产生大量误报"><input type="checkbox" id="binary"><span>包含二进制<span class="hint">误报会明显增多</span></span></label>
       <label class="chk" title="只影响导出的报告文件，界面仍显示明文"><input type="checkbox" id="redact"><span>导出脱敏<span class="hint">界面仍显示明文</span></span></label>
     </div>
@@ -295,6 +298,7 @@ tr:last-child td{border-bottom:0}
       </div>
       <div class="progress hide" id="progress"><i></i></div>
       <div id="jobMsg"></div>
+      <div id="backendInfo" class="tiny dim" style="margin:2px 0 6px"></div>
       <div class="exports">
         <button class="btn sm" data-exp="html" title="导出 HTML 报告">HTML</button>
         <button class="btn sm" data-exp="csv" title="导出 CSV，供合规评审">CSV</button>
@@ -329,6 +333,10 @@ tr:last-child td{border-bottom:0}
             <div class="legend" id="legend"></div></div></div>
         </div>
         <div class="batchgrid" id="batches"></div>
+        <div class="panel hide" id="diagPanel" style="margin-bottom:14px">
+          <h4>扫描诊断 <span id="diagMeta"></span></h4>
+          <div id="diagBody"></div>
+        </div>
         <div class="panel" style="margin-bottom:14px"><h4>降噪与验证 <span id="scanMeta"></span></h4>
           <div class="funnel" id="funnel"></div>
           <div id="verifySummary" style="margin-top:12px"></div>
@@ -448,6 +456,19 @@ function pickText(id){return $(id)?.value||"";}
 // ---------------------------------------------------------------- 初始化
 async function init(){
   $("verTxt").textContent = "v__SENSCAN_VERSION__";
+  // 端口被旧进程占着时，HTML 是从磁盘读的新版、后端却是启动时加载的旧模块。
+  // 主动探一次能力指纹，避免「勾选了却不生效」还查不出原因。
+  try{
+    const p = await api("/api/ping");
+    if(!p.container || !p.preflight) throw new Error("后端能力过旧");
+    S.backendStale = false;
+    $("backendInfo").textContent =
+      `后端 v${p.version} · PID ${p.pid} · 启动 ${p.started_at} · 容器拆解可用`;
+  }catch(e){
+    S.backendStale = true;
+    $("backendInfo").innerHTML = '<b style="color:#a5251a">⚠ 工作台前后端不匹配：同一端口可能同时跑着多个 senscan ui，'
+      + '或后端是旧进程，「拆解容器」等勾选不会生效。请结束所有旧进程，或换端口重新启动。</b>';
+  }
   try{
     const st = await api("/api/state");
     S.endpoints = st.endpoints||[];
@@ -488,7 +509,7 @@ function collectOpts(){
   return {
     paths, min_confidence:parseFloat($("conf").value),
     whitelist_text:pickText("wl"), include_binary:$("binary").checked,
-    no_pcap:!$("pcap").checked, max_file_mb:512, redact:$("redact").checked,
+    no_pcap:!$("pcap").checked, no_container:!$("container").checked, max_file_mb:512, redact:$("redact").checked,
     authorized:$("vAuthorized").checked, confirm_phrase:pickText("confirmPhrase").trim(),
     verify:{
       local:$("vLocal").checked, online,
@@ -551,7 +572,11 @@ async function runScan(){
         }
       }catch(e){finish("进度查询失败："+e.message,true);}
     },350);
-  }catch(e){finish("启动失败："+e.message,true);}
+  }catch(e){
+    // 启动失败（路径不存在等）要把原因留在页面上，不能只弹 3 秒 toast
+    $("jobMsg").textContent="启动失败："+e.message;
+    finish("启动失败："+e.message,true);
+  }
 }
 async function stopScan(){
   if(!S.jobId) return;
@@ -604,6 +629,30 @@ function renderAll(){
     ["缺上下文",st.suppressed_no_context],["低置信",st.suppressed_low_confidence],
     ["白名单",st.whitelisted],["输出",f.length]].map(([k,n],i)=>
     `${i?'<span class="arw">→</span>':''}<span>${k} <b>${n}</b></span>`).join("");
+
+  // 诊断：0 命中时把「为什么」摆出来。没有这块，用户只能对着一张全 0 的看板猜，
+  // 分不清「扫了没发现」和「根本没扫」。
+  const sk=st.skipped||[], zero=st.files_scanned===0;
+  const showDiag=zero||!f.length||sk.length>0||!!st.container_truncated;
+  $("diagPanel").classList.toggle("hide",!showDiag);
+  if(showDiag){
+    $("diagMeta").textContent=`已扫 ${st.files_scanned} 文件 · ${st.container_entries||0} 条目 · 跳过 ${st.files_skipped} 项`;
+    const rows=[];
+    if(S.backendStale) rows.push(`<div class="notice" style="background:#fde8e6;border-color:#f5c2bd;color:#a5251a;margin-bottom:10px">
+      <b>请求可能落在另一个工作台进程上。</b>同一端口同时跑着多个 senscan ui 时，
+      页面是新版、后端却是旧版，「拆解容器」等勾选不会生效。请结束所有旧进程，或换端口重新启动后再扫一次。</div>`);
+    if(zero) rows.push(`<div class="notice" style="background:#fde8e6;border-color:#f5c2bd;color:#a5251a;margin-bottom:10px">
+      <b>没有任何文件被实际扫描。</b>下面列出的跳过原因就是结论：路径对不上、文件被判为二进制，或容器里没有可扫的文本条目。</div>`);
+    else if(!f.length) rows.push(`<div class="notice" style="margin-bottom:10px">
+      已扫 ${st.files_scanned} 文件 / ${st.container_entries||0} 条目，未发现达到阈值 ${d.scan.min_confidence} 的实体；
+      可下调阈值，或勾选「包含二进制」复核。</div>`);
+    if(st.container_truncated) rows.push(`<div class="notice" style="margin-bottom:10px">
+      容器解包预算用尽，只扫了一部分条目；建议先解包成目录再单独扫描。</div>`);
+    if(sk.length) rows.push(`<div class="tiny dim" style="margin:6px 0 4px">跳过明细（显示前 12 条 / 共 ${sk.length} 条）</div>
+      <ul style="margin:0;padding-left:18px">${sk.slice(0,12).map(x=>
+        `<li class="mono tiny" style="margin:3px 0;word-break:break-all">${esc(x)}</li>`).join("")}</ul>`);
+    $("diagBody").innerHTML=rows.join("");
+  }
   if(v && (v.enabled_local||v.enabled_online)){
     const chips=Object.entries(live).filter(([,n])=>n).map(([k,n])=>
       `<span class="chip ${esc(k)}" style="margin:2px 4px 2px 0">${esc(LIVE[k]||k)} ${n}</span>`).join("");
@@ -672,6 +721,9 @@ function renderRows(){
     const idx=(S.page-1)*S.pageSize+i, real=(S.data.findings||[]).indexOf(x);
     const loc=x.source.split(/[\\/]/).pop()+":"+x.line+":"+x.column;
     const v=short(masked?mask(x.value):x.value,58);
+    // 列表里只放纯文本，⟦⟧ 标记留给抽屉/JSON 报告标识命中边界
+    const ctxPlain=String(x.context||"").replace(/[⟦⟧]/g,"");
+    const ctxCell=short(masked?mask(ctxPlain):ctxPlain,96);
     const lv=liveOf(x), lvText=lv==="n/a"?"—":(LIVE[lv]||lv);
     return `<tr data-real="${real}">
       <td class="dim">${idx+1}</td>
@@ -684,7 +736,7 @@ function renderRows(){
       <td><b>${Number(x.confidence).toFixed(2)}</b></td>
       <td class="mono tiny dim ellip" title="${esc(x.source)}">${esc(loc)}</td>
       <td><span class="code">${esc(v)}</span></td>
-      <td class="dim ellip" title="${esc(x.context)}">${esc(short(x.context,52))}</td></tr>`;
+      <td class="dim ellip" title="${esc(masked?mask(ctxPlain):ctxPlain)}">${esc(ctxCell)}</td></tr>`;
   }).join("")||`<tr><td colspan="11" style="text-align:center;padding:38px;color:var(--muted)">
       无匹配结果</td></tr>`;
   const st=(S.data&&S.data.scan&&S.data.scan.started_at)||"";
@@ -703,6 +755,11 @@ function openDrawer(i){
   const shown=hidden?mask(f.value):f.value;
   const v=f.extra&&f.extra.verification;
   const reasons=(f.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join("")||"<li>无附加信息</li>";
+  // 原文按「前段 / 命中值 / 后段」三段渲染，命中值高亮；旧报告没有 parts 时降级为整段文本
+  const cp=f.context_parts, fmt=hidden?mask:(s=>String(s||""));
+  const ctxHtml=(cp&&cp.hit!==undefined)
+    ? `${esc(fmt(cp.before))} <mark class="hit" title="命中值">${esc(fmt(cp.hit))}</mark> ${esc(fmt(cp.after))}`
+    : esc(hidden?mask(f.context||"—"):(f.context||"—"));
   const vblock=v?`<div class="dsec"><h5>存活验证</h5>
     <p><span class="chip ${esc(v.status)}">${esc(LIVE[v.status]||v.status)}</span>　${esc(v.detail||"")}</p>
     ${v.endpoint?`<p class="tiny dim" style="margin-top:5px">${esc(v.endpoint)} · HTTP ${v.http_status??"—"} · ${v.elapsed_ms||0} ms</p>`:""}
@@ -722,7 +779,7 @@ function openDrawer(i){
       <div class="dsec"><h5>判定依据</h5><ul>${reasons}</ul></div>
       ${vblock}
       <div class="dsec"><h5>建议</h5><p>${esc(f.remediation||"确认是否属敏感数据")}</p></div>
-      <div class="dsec"><h5>原文</h5><p class="val" style="max-height:110px">${esc(hidden?mask(f.context||"—"):(f.context||"—"))}</p></div>
+      <div class="dsec"><h5>原文（高亮＝命中值）</h5><p class="val" style="max-height:240px">${ctxHtml}</p></div>
     </div>
     <footer><button class="btn sm" id="copyVal">复制值</button>
       <button class="btn sm" id="verifyOne">验证存活</button>

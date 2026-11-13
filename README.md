@@ -1,6 +1,6 @@
 # sensift-audit
 
-在日志、配置、埋点 JSON、固件产物和 pcap 里翻找被人忘掉的密钥、令牌和个人信息，然后告诉你它在哪一行、有多可信、该先处理哪一条。
+在日志、配置、埋点 JSON、固件产物、APK 包和 pcap 里翻找被人忘掉的密钥、令牌和个人信息，然后告诉你它在哪一行、有多可信、该先处理哪一条。
 
 Python 3.10+，零第三方依赖。抓包解析需要系统里有 `tshark`（Wireshark 自带）；没装也能扫文本，只是 pcap 会被跳过。
 
@@ -20,6 +20,19 @@ python -m senscan ui                          # 浏览器打开 http://127.0.0.1
 | `--verify-local` | 离线判断 JWT 过期、签名 URL 失效、PEM 结构，不联网 |
 | `--redact` | 报告脱敏，外发前加 |
 | `--fail-on critical` | 命中即返回退出码 2，给 CI 用 |
+| `--no-container` | 不拆包，只扫裸文本 |
+
+能喂进去的东西：
+
+| 目标 | 怎么处理 |
+|---|---|
+| 日志 / 配置 / JSON / 源码 | 依次试 UTF-8、GBK、UTF-16 解码后直接扫 |
+| pcap / pcapng | 调 `tshark` 抽明文 HTTP 载荷；TLS 正文看不到 |
+| APK / JAR / IPA | 解包：assets 等文本直扫，`classes.dex`、`.so`、`resources.arsc` 抽可打印串 |
+| Office / zip / tar / gz | Office 取正文 XML；压缩包递归两层，带 zip 炸弹防护 |
+| SQLite | 逐表逐列导出 `表.列=值`，列名当上下文 |
+
+包内命中定位写成 `app.apk!assets/config.json:12`，`!` 后面是包内路径。
 
 | 类别 | 实体 | 风险 | 判定依据 |
 |---|---|---|---|

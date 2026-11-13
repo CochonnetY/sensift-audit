@@ -11,6 +11,7 @@
 |---|---|
 | 从日志、配置、埋点 JSON、固件解压产物中提取凭据与设备标识 | 判断某条数据是否构成"违法处理" |
 | 从 pcap 中提取**明文** HTTP 的 URL / Header / Body | 解密 TLS 流量正文 |
+| 拆开 APK / JAR / IPA / Office / zip / tar / gz / SQLite 再扫里面的内容 | 反编译 dex 还原 Java 源码；只抽字符串 |
 | 给出置信度、风险等级、文件与行列定位、上下文片段 | 保证 100% 召回 |
 | 导出 CSV 交评审、SARIF 进 CI、HTML 给汇报 | 替代人工复核 |
 | 白名单放行已知安全项 | 自动修复泄露 |
@@ -75,6 +76,24 @@ echo $?   # 0 = 通过, 2 = 发现严重问题
 
 `--no-report` 只判不写，适合流水线里的门禁步骤。要留证据就带上报告。
 
+### 场景 4：审一个 App 包
+
+```bash
+senscan ./release/app-release.apk -o out --verify-local
+```
+
+不用先手动解包。APK 会自动识别，按条目逐个扫：
+
+- `assets/`、`res/raw/` 里的 json / txt / html —— 当文本扫，行号就是条目内的行号
+- `classes*.dex`、`lib/**/*.so`、`resources.arsc`、`AndroidManifest.xml` —— 抽可打印串再扫
+- 图片、字体、`res/drawable` 直接跳过，不浪费时间也不产生噪声
+
+报告里的来源写成 `app-release.apk!assets/config.json:12`，`!` 后面是包内路径。
+同一个包内 PK / DN / DS 分散在不同条目里，仍会合并判定为「设备身份可被完整仿冒」。
+
+同理可扫 `.jar`、`.ipa`、`.docx/.xlsx/.pptx`、`.zip`、`.tar.gz`、`.db`（SQLite）。
+容器默认开启，`--no-container` 可关掉整条通道。
+
 ---
 
 ## 四、命令行参数
@@ -90,6 +109,7 @@ echo $?   # 0 = 通过, 2 = 发现严重问题
 | `--redact` | 关 | 报告中的值与上下文脱敏 |
 | `--include-binary` | 关 | 不跳过二进制文件（固件场景慎用，噪声极大） |
 | `--no-pcap` | 关 | 关闭 pcap 解析通道 |
+| `--no-container` | 关 | 关闭容器解包通道（APK/JAR/IPA/Office/zip/tar/gz/SQLite） |
 | `--max-file-mb` | `512` | 单文件上限，超出则按行分块流式处理 |
 | `--top` | `20` | 控制台最多展示条数 |
 | `--no-report` | 关 | 只打印，不落盘 |
@@ -280,6 +300,17 @@ senscan ./rootfs/etc ./rootfs/var/log -o reports --fail-on critical --format jso
 4. 到 `senscan/rules/` 对应类别文件里收紧该规则的 `pattern` 或加 `context_required=True`
 
 **不要**直接删规则——删除会同时丢掉召回。
+
+### 大文件太慢
+
+扫描前会先判断每条规则的关键字是否出现在文本里（如 `password`、`设备密钥`、`AKIA`），
+不存在就整条跳过。所以：
+
+- 一个几百 MB 的目录里如果没有 APK / 密钥类内容，绝大部分规则根本不会启动，速度取决于命中类型数而不只是体积
+- 日志里如果全是 `token=`，token 类规则仍会全量扫，这是必然的——它真的是候选
+- 想再快就分目录跑：`senscan ./logs/a -o out/a` 与 `senscan ./logs/b -o out/b` 并行
+
+实测量级：17.8 MB 日志约 12 秒，9 MB 的 APK（含 4 MB dex）约 4 秒。
 
 ### 漏报
 

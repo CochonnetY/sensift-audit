@@ -34,7 +34,8 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
         base_confidence=0.9,
         category=PKI,
         validators=("pem_body",),
-        max_value_len=1024,
+        # RSA-4096 的 PEM 正文约 3.2KB；1024 会把块截断，报告里只剩半把私钥。
+        max_value_len=4096,
         remediation="立即作废该密钥对并重新签发；排查公钥侧信任配置是否需要同步更新",
         note="完整 PEM 私钥块（RSA/EC/DSA/OPENSSH/PGP）",
     ),
@@ -45,8 +46,11 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
         risk=R.HIGH,
         base_confidence=0.72,
         category=PKI,
+        # 只有 BEGIN 头而没有 base64 正文，绝大多数是 .so 里编译进去的 PEM 解析器
+        # 提示串（后面紧跟 -----END----- 或「no start line」），不是密钥。
+        context_validators=("pem_head_body",),
         remediation="确认该文件/字段是否真含密钥体；若为截断日志，需按私钥泄露处置",
-        note="仅 BEGIN 头（日志被截断或只打印了首行）",
+        note="仅 BEGIN 头（日志被截断或只打印了首行），要求头后紧跟 base64 正文",
     ),
     Rule(
         id="putty-private-key",
@@ -481,7 +485,7 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
         risk=R.HIGH,
         base_confidence=0.72,
         group=1,
-        validators=("not_placeholder",),
+        validators=("not_placeholder", "plausible_secret"),
         bonus_validators=("entropy",),
         remediation=ROTATE,
     ),
@@ -509,7 +513,7 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
         risk=R.HIGH,
         base_confidence=0.62,
         group=1,
-        validators=("not_placeholder",),
+        validators=("not_placeholder", "not_markup_literal", "plausible_secret"),
         bonus_validators=("entropy",),
         remediation=CHECK_SCOPE,
         note="明文口令出现在日志/配置中",
@@ -517,7 +521,10 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
     Rule(
         id="otp",
         entity="OTP",
-        pattern=r"""(?i)(?:otp|passcode|one[_\-]?time[_\-]?code|verification[_\- ]?code|verify[_\- ]?code|sms[_\- ]?code|auth[_\- ]?code|验证码|动态码|短信码)(?:[^0-9\n]{0,24}|[^0-9\n]{0,12}\r?\n[^0-9\n]{0,8})(\d{4,8})(?!\d)""",
+        # 英文关键词加 \b（执行器会换成 ASCII 词边界，挡住 hotpink / postcode）；
+        # 中文不能加：ASCII 模式下汉字不算词字符，行首反而判不出边界。
+        # 数字两侧要求非字母数字：否则哈希串里的子串（aa623e26）会被当成验证码。
+        pattern=r"""(?i)(?:\b(?:otp|passcode|one[_\-]?time[_\-]?code|verification[_\- ]?code|verify[_\- ]?code|sms[_\- ]?code|auth[_\- ]?code)|验证码|动态码|短信码)(?:[^0-9\n]{0,24}|[^0-9\n]{0,12}\r?\n[^0-9\n]{0,8})(?<![0-9A-Za-z])(\d{4,8})(?![0-9A-Za-z])""",
         risk=R.MEDIUM,
         base_confidence=0.78,
         group=1,
