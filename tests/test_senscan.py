@@ -228,16 +228,19 @@ class TestEndToEnd(unittest.TestCase):
         from senscan import detectors
         cases = (
             '{"encr":1,"key_mgmt":6,"psk":"test123456","ssid":"ImmortalWrt"}',
-            "wifi_password: s3cret-pa55",
+            "wlan_psk=Hunter2Blue42x",
+            "pre_shared_key: ab12cd34ef56",
         )
         for text in cases:
             got = detectors.detect(text, "x.log", 0.55, {})
             self.assertTrue(
                 any(f.rule_id == "wifi-psk" for f in got), f"wifi-psk 漏报: {text}"
             )
-        # wpa_passphrase 会被更早的 password-inline 以同 span 命中，同样算覆盖
-        got = detectors.detect("wpa_passphrase=Hunter2Blue42!", "x.log", 0.55, {})
-        self.assertTrue(any(f.entity == "PASSWORD" for f in got))
+        # wpa_passphrase / wifi_password 会被更早的 password-inline 以同 span 命中，
+        # 同样算覆盖，这里只断言 PASSWORD 实体存在
+        for text in ("wpa_passphrase=Hunter2Blue42!", "wifi_password: s3cret-pa55"):
+            got = detectors.detect(text, "x.log", 0.55, {})
+            self.assertTrue(any(f.entity == "PASSWORD" for f in got), f"漏报: {text}")
         trap = '{"opId":13,"ssid":"ImmortalWrt","key_mgmt":6,"encr":1}'
         got = detectors.detect(trap, "x.log", 0.55, {})
         self.assertFalse([f for f in got if f.rule_id == "wifi-psk"], "邻居键误报")
