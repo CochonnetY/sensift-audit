@@ -519,6 +519,26 @@ CREDENTIAL_RULES: tuple[Rule, ...] = (
         note="明文口令出现在日志/配置中",
     ),
     Rule(
+        id="wifi-psk",
+        entity="PASSWORD",
+        # BLE 配网协议（微信 AirSync/厂商自定义）与路由器配置里最常见的一类
+        # 明文口令：{"psk":"test123456","ssid":"..."}、wpa_passphrase=xxx。
+        # `psk` 单独成键时不加前缀限制（prefix=0 会让任意前缀都能粘上来），
+        # 但 key_re 的左边界 + 尾部 (?![A-Za-z0-9]) 已经挡住词中误命中。
+        pattern=key_re(
+            r"psk|pre[_\-]?shared[_\-]?key|wpa[_\-]?pass(?:phrase|word|wd)"
+            r"|w(?:ifi|lan|ifi)[_\-]?(?:pass(?:word|wd)?|pwd|key)",
+            r"无线密码|WiFi密码|Wi-Fi密码|热点密码" + _NOT_POLICY,
+        ) + r"""([^\s"'?&;,\]}]{6,64})""",
+        risk=R.HIGH,
+        base_confidence=0.62,
+        group=1,
+        validators=("not_placeholder", "not_markup_literal", "plausible_secret"),
+        bonus_validators=("entropy",),
+        remediation="从日志/配置中移除该 Wi-Fi 口令；配网协议应避免明文下发 PSK",
+        note="Wi-Fi 预共享密钥（psk/passphrase）明文，常见于 BLE 配网与路由器配置",
+    ),
+    Rule(
         id="otp",
         entity="OTP",
         # 英文关键词加 \b（执行器会换成 ASCII 词边界，挡住 hotpink / postcode）；

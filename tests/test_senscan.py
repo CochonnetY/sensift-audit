@@ -223,6 +223,25 @@ class TestEndToEnd(unittest.TestCase):
         )
         self.assertTrue(all(f.extra.get("frame") == 1 for f in r.findings))
 
+    def test_wifi_psk_rule(self):
+        # BLE 配网 JSON 与路由器配置里的 Wi-Fi 明文口令；key_mgmt/ssid 等邻居键不能误报
+        from senscan import detectors
+        cases = (
+            '{"encr":1,"key_mgmt":6,"psk":"test123456","ssid":"ImmortalWrt"}',
+            "wifi_password: s3cret-pa55",
+        )
+        for text in cases:
+            got = detectors.detect(text, "x.log", 0.55, {})
+            self.assertTrue(
+                any(f.rule_id == "wifi-psk" for f in got), f"wifi-psk 漏报: {text}"
+            )
+        # wpa_passphrase 会被更早的 password-inline 以同 span 命中，同样算覆盖
+        got = detectors.detect("wpa_passphrase=Hunter2Blue42!", "x.log", 0.55, {})
+        self.assertTrue(any(f.entity == "PASSWORD" for f in got))
+        trap = '{"opId":13,"ssid":"ImmortalWrt","key_mgmt":6,"encr":1}'
+        got = detectors.detect(trap, "x.log", 0.55, {})
+        self.assertFalse([f for f in got if f.rule_id == "wifi-psk"], "邻居键误报")
+
     def test_btsnoop_hci_channel(self):
         # 蓝牙 HCI 日志（btsnoop，如 Android btsnoop_hci.log）：tshark 原生可读，
         # ATT 明文写入值应能命中；未勾选抓包解析时应显式跳过而不是当二进制忽略
