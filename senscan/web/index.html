@@ -260,7 +260,7 @@ tr:last-child td{border-bottom:0}
         <b id="confVal">0.55</b></div>
     </div>
     <div class="checks">
-      <label class="chk" title="用 tshark 抽取明文载荷；TLS 正文无法扫描"><input type="checkbox" id="pcap" checked><span>解析抓包<span class="hint">仅明文，TLS 正文不可扫</span></span></label>
+      <label class="chk" title="默认跳过抓包文件；勾选后才用 tshark 解析 Wireshark 抓包（.pcap/.pcapng），仅抽明文载荷，TLS 正文无法扫描"><input type="checkbox" id="pcap"><span>解析抓包 (Wireshark)<span class="hint">需勾选 · .pcap/.pcapng 明文</span></span></label>
       <label class="chk" title="拆开 APK/JAR/IPA/Office/压缩包/SQLite 再扫里面的内容"><input type="checkbox" id="container" checked><span>拆解容器<span class="hint">APK、Office、压缩包、SQLite</span></span></label>
       <label class="chk" title="固件产物可能产生大量误报"><input type="checkbox" id="binary"><span>包含二进制<span class="hint">误报会明显增多</span></span></label>
       <label class="chk" title="只影响导出的报告文件，界面仍显示明文"><input type="checkbox" id="redact"><span>导出脱敏<span class="hint">界面仍显示明文</span></span></label>
@@ -648,6 +648,10 @@ function renderAll(){
       可下调阈值，或勾选「包含二进制」复核。</div>`);
     if(st.container_truncated) rows.push(`<div class="notice" style="margin-bottom:10px">
       容器解包预算用尽，只扫了一部分条目；建议先解包成目录再单独扫描。</div>`);
+    const pcapSkips=sk.filter(x=>x.includes("pcap")&&x.includes("未启用")).length;
+    if(pcapSkips) rows.push(`<div class="notice" style="margin-bottom:10px">
+      <b>${pcapSkips} 个 Wireshark 抓包文件被跳过</b>（未勾选「解析抓包 (Wireshark)」）。
+      需要分析抓包内容时勾选该选项后重新扫描。</div>`);
     if(sk.length) rows.push(`<div class="tiny dim" style="margin:6px 0 4px">跳过明细（显示前 12 条 / 共 ${sk.length} 条）</div>
       <ul style="margin:0;padding-left:18px">${sk.slice(0,12).map(x=>
         `<li class="mono tiny" style="margin:3px 0;word-break:break-all">${esc(x)}</li>`).join("")}</ul>`);
