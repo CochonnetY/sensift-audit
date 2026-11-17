@@ -329,7 +329,7 @@ def scan(
         if pcapmod.is_pcap(head):
             if not enable_pcap:
                 stats.files_skipped += 1
-                stats.skipped.append(f"{path} (pcap 抓包，解析未启用)")
+                stats.skipped.append(f"{path} (pcap/HCI 抓包，解析未启用)")
                 continue
             if pcapmod.tshark_path() is None:
                 stats.files_skipped += 1

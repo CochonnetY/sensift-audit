@@ -260,7 +260,7 @@ tr:last-child td{border-bottom:0}
         <b id="confVal">0.55</b></div>
     </div>
     <div class="checks">
-      <label class="chk" title="默认跳过抓包文件；勾选后才用 tshark 解析 Wireshark 抓包（.pcap/.pcapng），仅抽明文载荷，TLS 正文无法扫描"><input type="checkbox" id="pcap"><span>解析抓包 (Wireshark)<span class="hint">需勾选 · .pcap/.pcapng 明文</span></span></label>
+      <label class="chk" title="默认跳过抓包文件；勾选后才用 tshark 解析 Wireshark 支持的抓包（.pcap/.pcapng 与蓝牙 HCI 日志 btsnoop），仅抽明文载荷，TLS 正文无法扫描"><input type="checkbox" id="pcap"><span>解析抓包 (Wireshark)<span class="hint">需勾选 · pcap / 蓝牙 HCI 明文</span></span></label>
       <label class="chk" title="拆开 APK/JAR/IPA/Office/压缩包/SQLite 再扫里面的内容"><input type="checkbox" id="container" checked><span>拆解容器<span class="hint">APK、Office、压缩包、SQLite</span></span></label>
       <label class="chk" title="固件产物可能产生大量误报"><input type="checkbox" id="binary"><span>包含二进制<span class="hint">误报会明显增多</span></span></label>
       <label class="chk" title="只影响导出的报告文件，界面仍显示明文"><input type="checkbox" id="redact"><span>导出脱敏<span class="hint">界面仍显示明文</span></span></label>

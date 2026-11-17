@@ -1,4 +1,4 @@
-"""pcap / pcapng 接入：调用 tshark 抽取可读载荷，再走统一的检测引擎。
+"""pcap / pcapng / 蓝牙 HCI（btsnoop）接入：调用 tshark 抽取可读载荷，再走统一的检测引擎。
 
 定位说明：旁路镜像只能提供元数据（SNI / DNS / 证书）与**明文**载荷。
 TLS 正文字段在 pcap 里就是密文，解码后控制字符占比极高，会被本模块丢弃——
@@ -27,6 +27,8 @@ _FIELDS = (
     "dns.qry.name",
     "ftp.request.arg", "telnet.data",
     "tcp.payload",
+    # 蓝牙 HCI（btsnoop）：ATT 写入值与未识别数据段，tshark 输出为 hex
+    "btatt.value", "data.data",
 )
 
 _PCAP_MAGICS = (
@@ -35,14 +37,17 @@ _PCAP_MAGICS = (
     b"\x0a\x0d\x0d\x0a",                       # pcapng
 )
 
-# _FIELDS 中的 hex 字段下标（parts 索引）：http.file_data=11, tcp.payload=17
-_HEX_FIELD_IDX = {11, 17}
+# hex 字段：tshark 输出的是十六进制串，必须解码后再扫（下标与 _FIELDS 对应）
+_HEX_FIELDS = {"http.file_data", "tcp.payload", "btatt.value", "data.data"}
+_HEX_FIELD_IDX = {i for i, f in enumerate(_FIELDS) if f in _HEX_FIELDS}
 
 DEFAULT_TIMEOUT = 900
 
+_BTSNOOP_MAGIC = b"btsnoop\x00"  # 蓝牙 HCI 日志（Android btsnoop_hci.log 等）
+
 
 def is_pcap(head: bytes) -> bool:
-    return head[:4] in _PCAP_MAGICS
+    return head[:4] in _PCAP_MAGICS or head[:8] == _BTSNOOP_MAGIC
 
 
 def tshark_path() -> str | None:

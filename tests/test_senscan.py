@@ -223,6 +223,32 @@ class TestEndToEnd(unittest.TestCase):
         )
         self.assertTrue(all(f.extra.get("frame") == 1 for f in r.findings))
 
+    def test_btsnoop_hci_channel(self):
+        # 蓝牙 HCI 日志（btsnoop，如 Android btsnoop_hci.log）：tshark 原生可读，
+        # ATT 明文写入值应能命中；未勾选抓包解析时应显式跳过而不是当二进制忽略
+        import struct
+        import tempfile
+        from senscan import pcap as pcapmod
+
+        if pcapmod.tshark_path() is None:
+            self.skipTest("未安装 tshark")
+        secret = b"password=hunter2blue42"
+        att = b"\x12\x11\x00" + secret                    # ATT Write Request
+        l2cap = struct.pack("<HH", len(att), 0x0004) + att  # CID 0x0004 = ATT
+        h4 = b"\x02" + struct.pack("<HH", 0x0041, len(l2cap)) + l2cap  # H4 ACL
+        blob = b"btsnoop\x00" + struct.pack(">II", 1, 1002)
+        blob += struct.pack(">IIIIQ", len(h4), len(h4), 0, 0, 0) + h4
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "btsnoop_hci.log"
+            p.write_bytes(blob)
+            r = scan([p])
+            entities = {f.entity for f in r.findings}
+            self.assertIn("PASSWORD", entities, f"btsnoop 漏报，实际: {sorted(entities)}")
+            self.assertTrue(all(f.extra.get("frame") == 1 for f in r.findings))
+            r2 = scan([p], enable_pcap=False)
+            self.assertEqual(r2.findings, [])
+            self.assertTrue(any("pcap/HCI" in s for s in r2.stats.skipped))
+
     def test_whitelist(self):
         if not self.SAMPLES.exists():
             self.skipTest("样本未生成")
