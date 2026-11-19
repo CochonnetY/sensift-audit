@@ -61,6 +61,11 @@ textarea{resize:vertical;min-height:64px;line-height:1.55}
 .btn.sm{padding:5px 9px;font-size:11.5px}
 .btn.ghost{border-style:dashed;color:var(--muted)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.danger{color:#a5251a;border-color:#f0c9c4;background:#fff}
+.btn.danger:hover{background:#fde8e6;border-color:#e8a9a1}
+.btn.danger:disabled{opacity:.45}
+.savenote{margin-top:9px;padding:8px 10px;border-radius:7px;background:#f6f8fc;
+  border:1px solid var(--line2);font-size:11px;line-height:1.55;color:var(--muted)}
 .checks{display:grid;gap:7px}
 .chk{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--ink2);cursor:pointer}
 .chk input{margin-top:3px;accent-color:var(--primary);flex:none}
@@ -305,6 +310,13 @@ tr:last-child td{border-bottom:0}
         <button class="btn sm" data-exp="sarif" title="导出 SARIF，供 CI 集成">SARIF</button>
         <button class="btn sm" data-exp="json" title="导出完整 JSON">JSON</button>
       </div>
+      <div class="row" style="margin-top:8px;gap:6px">
+        <button class="btn sm danger" id="clearBtn" title="清空当前扫描结果、任务历史与在线验证审计记录（已导出的文件不受影响）">删除当前测试数据</button>
+      </div>
+      <div class="savenote" id="savenote">
+        默认<b>不保存扫描记录</b>：结果只留在当前页面内存里，刷新或关闭工作台即清空，不会自动落盘、也不会恢复上次结果。<br>
+        需要留档时点上方按钮<b>导出测试记录</b>（HTML / CSV / SARIF / JSON）；导出的文件由你自行保管。
+      </div>
     </div>
   </aside>
 
@@ -462,10 +474,17 @@ async function init(){
     const p = await api("/api/ping");
     if(!p.container || !p.preflight) throw new Error("后端能力过旧");
     S.backendStale = false;
+    S.hasClear = !!p.clear;
+    $("clearBtn").disabled = !p.clear;
+    $("clearBtn").title = p.clear
+      ? "清空当前扫描结果、任务历史与在线验证审计记录（已导出的文件不受影响）"
+      : "后端版本过旧，请重启工作台";
     $("backendInfo").textContent =
       `后端 v${p.version} · PID ${p.pid} · 启动 ${p.started_at} · 容器拆解可用`;
   }catch(e){
     S.backendStale = true;
+    S.hasClear = false;
+    $("clearBtn").disabled = true;
     $("backendInfo").innerHTML = '<b style="color:#a5251a">⚠ 工作台前后端不匹配：同一端口可能同时跑着多个 senscan ui，'
       + '或后端是旧进程，「拆解容器」等勾选不会生效。请结束所有旧进程，或换端口重新启动。</b>';
   }
@@ -489,14 +508,8 @@ async function init(){
     const rules = await api("/api/rules");
     S.rules = rules.rows; $("ruleCount").textContent = rules.total;
     renderRules();
-    if(st.last_job_id){
-      // 旧任务可能已被淘汰；取不到结果不应连累规则库、端点目录等初始化内容。
-      try{
-        S.data = await api("/api/result?id="+encodeURIComponent(st.last_job_id));
-        S.jobId = st.last_job_id;
-        renderAll();
-      }catch(e){S.data=null; S.jobId=null;}
-    }
+    // 不保存扫描记录：不再从后端恢复上次结果，页面每次打开都是干净空态。
+    // 用户需要留档时主动导出（导出按钮在侧栏）。
   }catch(e){toast("初始化失败："+e.message,true);}
   await refreshAudit();
 }
@@ -886,11 +899,55 @@ async function exportFile(fmt){
   }catch(e){toast("导出失败："+e.message,true);}
 }
 
+// ---------------------------------------------------------------- 清空
+function resetView(){
+  // 把整张看板恢复成"暂无结果"的初始态。renderAll 在 !S.data 时会直接
+  // return，所以这里必须自己清 DOM，否则清空后还留着上一次的数字和表格。
+  S.data=null; S.jobId=null; S.filtered=[]; S.page=1; S.pageSize=20;
+  S.sortKey=null; S.sortDir=1; S.drawerIdx=null; S.redact=false;
+  $("overviewEmpty").classList.remove("hide");
+  $("overviewBody").classList.add("hide");
+  $("tabCount").textContent="0";
+  ["kpis","riskBars","legend","batches","funnel","verifySummary","hotFiles","spread",
+   "diagBody"].forEach(id=>$(id).innerHTML="");
+  $("donutNum").textContent="0";
+  $("donut").style.background="conic-gradient(#e3e8f0 0 100%)";
+  $("scanMeta").textContent=""; $("diagMeta").textContent="";
+  $("diagPanel").classList.add("hide"); $("tripletAlert").classList.add("hide");
+  $("jobMsg").textContent="";
+  $("filterCount").textContent=""; $("pageInfo").textContent="1 / 1 页";
+  $("prevPage").disabled=true; $("nextPage").disabled=true;
+  $("rows").innerHTML=`<tr><td colspan="11" style="text-align:center;padding:38px;color:var(--muted)">无匹配结果</td></tr>`;
+  $("fQuery").value="";
+  ["fRisk","fPrio","fCat","fEnt","fLive"].forEach(id=>$(id).value="all");
+  $("fCat").innerHTML='<option value="all">全部类别</option>';
+  $("fEnt").innerHTML='<option value="all">全部实体</option>';
+  $("fLive").innerHTML='<option value="all">全部存活</option>';
+  document.querySelectorAll("th.sortable").forEach(x=>x.classList.remove("asc","desc"));
+  $("drawer").classList.add("hide"); $("drawerOverlay").classList.add("hide");
+}
+async function clearData(){
+  if(S.running) return toast("扫描进行中，请先停止再清空",true);
+  const n=(S.data&&S.data.findings||[]).length;
+  const msg=`删除当前测试数据？\n\n将清空内存中的扫描结果（${n} 条命中）、任务历史与在线验证审计记录，且无法恢复。\n已导出的报告文件不受影响。\n\n需要留档请先导出。`;
+  if(!confirm(msg)) return;
+  try{
+    const r=await api("/api/clear",{method:"POST",body:{include_audit:true}});
+    resetView();
+    await refreshAudit();
+    toast(`已清空 ${r.cleared||0} 条测试记录${r.audit_removed?" · 审计日志已删除":""}`);
+  }catch(e){toast("清空失败："+e.message,true);}
+}
+
 // ---------------------------------------------------------------- 事件
 $("conf").oninput=e=>$("confVal").textContent=parseFloat(e.target.value).toFixed(2);
 $("vOnline").onchange=e=>$("onlineCfg").classList.toggle("hide",!e.target.checked);
 $("runBtn").onclick=runScan;
 $("stopBtn").onclick=stopScan;
+$("clearBtn").onclick=()=>{
+  if(S.backendStale || !S.hasClear) return toast("后端版本过旧，请重启工作台后再清空",true);
+  clearData();
+};
 $("demoBtn").onclick=()=>{
   if(!S.demoPaths||!S.demoPaths.length) return toast("未找到示例目录",true);
   $("paths").value=S.demoPaths.join("\n"); toast("已填入示例路径");

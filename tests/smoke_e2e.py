@@ -252,6 +252,24 @@ def web_ui() -> None:
         except urllib.error.HTTPError as e:
             rec("工作台", "不存在路径启动期报错", e.code in (400, 422),
                 f"HTTP {e.code}")
+        # 不保存扫描记录：state 不暴露上次任务；清空接口抹掉结果后旧 job 取不到
+        req = urllib.request.Request(base + "/api/state",
+                                     headers={"X-Senscan-Token": token})
+        state = json.load(opener.open(req, timeout=10))
+        rec("工作台", "state 不暴露历史任务", "last_job_id" not in state)
+        req = urllib.request.Request(base + "/api/clear",
+                                     data=json.dumps({"include_audit": False}).encode(),
+                                     headers={"X-Senscan-Token": token,
+                                              "Content-Type": "application/json"})
+        cleared = json.load(opener.open(req, timeout=10))
+        req = urllib.request.Request(base + f"/api/result?id={jid}",
+                                     headers={"X-Senscan-Token": token})
+        try:
+            opener.open(req, timeout=10)
+            rec("工作台", "清空后旧结果不可恢复", False, "旧 job 仍能取到")
+        except urllib.error.HTTPError as e:
+            rec("工作台", "清空后旧结果不可恢复", e.code in (400, 404),
+                f"cleared={cleared.get('cleared')} HTTP {e.code}")
     except Exception as exc:                                  # noqa: BLE001
         rec("工作台", "HTTP 接口", False, f"{type(exc).__name__}: {exc}")
 

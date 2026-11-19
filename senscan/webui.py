@@ -66,7 +66,7 @@ class Job:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
 
-STATE: dict[str, Any] = {"jobs": {}, "last": None}
+STATE: dict[str, Any] = {"jobs": {}}
 _LOCK = threading.Lock()
 
 
@@ -90,8 +90,7 @@ def state_payload() -> dict[str, Any]:
         "demo_paths": _workspace_demo(),
         "endpoints": VER.endpoint_catalog(),
         "audit_path": str(_AUDIT_PATH),
-        "has_result": STATE.get("last") is not None,
-        "last_job_id": STATE.get("last"),
+        # 不对外暴露历史任务 id：结果只在当前页面会话里有效，刷新/重开不恢复。
     }
 
 
@@ -176,8 +175,6 @@ def _run_scan(job: Job, opts: dict[str, Any]) -> None:
         job.status = "done"
         job.phase = "完成"
         job.message = f"{len(result.findings)} 条命中 / {result.stats.files_scanned} 文件 / {result.duration_ms} ms"
-        with _LOCK:
-            STATE["last"] = job.id
     except ScanCancelled:
         job.status = "cancelled"
         job.phase = "已停止"
@@ -215,15 +212,41 @@ def start_scan(opts: dict[str, Any]) -> dict[str, Any]:
     jid = secrets.token_hex(6)
     job = Job(id=jid, options=opts)
     with _LOCK:
+        # 「不保存扫描记录」：内存里始终只留当前这一次。开始新扫描时把旧任务
+        # 全部丢掉，不再累积历史；若旧任务仍在跑，先标记取消，避免它落地后
+        # 又变成一条可见的历史结果。
+        for old in STATE["jobs"].values():
+            if old.status == "running":
+                old.cancelled = True
+        STATE["jobs"].clear()
         STATE["jobs"][jid] = job
-        if len(STATE["jobs"]) > 12:
-            for k in list(STATE["jobs"])[:-12]:
-                STATE["jobs"].pop(k, None)
-            # last 可能指向刚被淘汰的任务；留着会让页面初始化拿到 400。
-            if STATE.get("last") not in STATE["jobs"]:
-                STATE["last"] = None
     threading.Thread(target=_run_scan, args=(job, opts), daemon=True).start()
     return {"job_id": jid}
+
+
+def clear_history(include_audit: bool = True) -> dict[str, Any]:
+    """删除当前工作台的全部测试历史。
+
+    只清内存中的扫描结果与任务，外加工作台自己生成的在线验证审计日志；
+    已导出的报告文件不在范围内——那是用户主动留存的结果，不该替他删。
+    正在跑的任务先标记取消，避免清完之后线程又把结果写回来变成"幽灵历史"。
+    """
+    with _LOCK:
+        jobs = STATE["jobs"]
+        removed = len(jobs)
+        running = [j for j in jobs.values() if j.status == "running"]
+        for j in running:
+            j.cancelled = True
+        jobs.clear()
+    audit_removed = False
+    if include_audit and _AUDIT_PATH.is_file():
+        try:
+            _AUDIT_PATH.unlink()
+            audit_removed = True
+        except OSError:
+            pass  # 文件被占用时不影响内存历史清理，前端照常重置
+    return {"ok": True, "cleared": removed,
+            "running_cancelled": len(running), "audit_removed": audit_removed}
 
 
 def cancel_scan(jid: str) -> dict[str, Any]:
@@ -385,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 能力指纹：老进程没有这个接口，前端会直接提示重启工作台。
                 self._json({"version": __version__, "pid": os.getpid(),
                             "started_at": _STARTED_AT, "rules": len(RULES),
-                            "container": True, "preflight": True})
+                            "container": True, "preflight": True, "clear": True})
             elif u.path == "/api/job":
                 job = STATE["jobs"].get(q.get("id", ""))
                 if job is None:
@@ -441,6 +464,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(browse_payload(str(payload.get("path", ""))))
             elif u.path == "/api/cancel":
                 self._json(cancel_scan(str(payload.get("job_id", ""))))
+            elif u.path == "/api/clear":
+                self._json(clear_history(bool(payload.get("include_audit", True))))
             elif u.path == "/api/verify":
                 self._json(verify_selection(payload))
             else:
