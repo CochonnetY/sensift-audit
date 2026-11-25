@@ -19,6 +19,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from . import compliance as COMP
 from . import utils as U
 from . import verify as VER
 from .models import (
@@ -183,6 +184,140 @@ _LIVE_TIP = {
     VER.NA: "身份标识不是凭据，没有存活概念",
     VER.STRUCTURE: "JWT / 证书结构有效，未联网确认",
 }
+
+
+_PILL = {
+    "pipl_sensitive": "sens", "gb_sensitive": "gb", "pi_general": "pi",
+    "device_identifier": "dev", "credential": "cred", "technical": "tech",
+    "unclassified": "unk",
+}
+_PIA_PILL = {"triggered": "pia-y", "conditional": "pia-c", "not_applicable": "pia-n"}
+
+
+def _compliance_section(result: ScanResult) -> str:
+    """合规映射章节：只讲线索归类，不给法律结论。"""
+    if not result.findings:
+        return ""
+    cp = COMP.build_payload([f.entity for f in result.findings])
+    sm = cp["summary"]
+    out = [
+        '<h2>合规映射（线索归类 · 非法律结论）</h2>',
+        f'<div class="cnotice"><b>效力层级</b>：{_e(cp["level_note"])}<br>'
+        f'{_e(cp["version_note"])}</div>',
+        '<div class="cnotice warnc"><b>口径差异提醒</b>：'
+        'PIPL 第 28 条法定「敏感个人信息」列举为生物识别、宗教信仰、特定身份、医疗健康、'
+        '金融账户、行踪轨迹及不满十四周岁未成年人信息；GB/T 35273-2020 附录 B 表 B.1 '
+        '「个人敏感信息」范围更宽，另含个人电话号码、邮箱地址及口令、系统账号等。'
+        '<b>两者不得直接等同</b>，本表对同一实体分别给出两套分类。'
+        '凭据类（API Key / 私钥 / 设备密钥）通常是组织资产，不硬套个人信息主体权利条款。</div>',
+        '<div class="ckpis">',
+        f'<div class="ckpi"><div class="n hot">{sm["pipl_sensitive_count"]}</div>'
+        '<div class="l">法定敏感个人信息（PIPL 第 28 条）</div></div>',
+        f'<div class="ckpi"><div class="n">{sm["gb_sensitive_count"]}</div>'
+        '<div class="l">国标口径敏感（附录 B，宽于法律）</div></div>',
+        f'<div class="ckpi"><div class="n hot">{sm["by_pia_trigger"]["triggered"]}</div>'
+        '<div class="l">明确触发事前 PIA（第 55 条第（一）项）</div></div>',
+        f'<div class="ckpi"><div class="n">{sm["needs_review_count"]}</div>'
+        '<div class="l">需人工判定的实体类型</div></div>',
+        '</div>',
+        '<table class="ctab"><thead><tr>'
+        '<th>实体 / 命中数</th><th>数据分类</th><th>PIPL 口径</th>'
+        '<th>GB/T 35273 口径</th><th>PIA 触发</th><th>归类依据与适用条款</th>'
+        '</tr></thead><tbody>',
+    ]
+    counts = result.by_entity
+    for entity, c in sorted(cp["by_entity"].items(),
+                            key=lambda kv: (-counts.get(kv[0], 0), kv[0])):
+        n = counts.get(entity, 0)
+        pill = _PILL.get(c["data_category"], "unk")
+        out.append(
+            '<tr>'
+            f'<td><span class="mono">{_e(entity)}</span><br>'
+            f'<span class="dim">命中 {n}</span></td>'
+            f'<td><span class="pill {pill}">{_e(c["data_category_label"])}</span>'
+            f'<div class="refs">{_e(COMP.DATA_CATEGORIES[c["data_category"]]["basis"])}</div></td>'
+            f'<td>{_e(c["pipl_class"])}</td>'
+            f'<td>{_e(c["gb35273_class"])}</td>'
+            f'<td><span class="pill {_PIA_PILL.get(c["pia_trigger"], "pia-n")}">'
+            f'{_e(c["pia_label"])}</span></td>'
+            f'<td>{_e(c["basis"])}'
+            f'<div class="refs">适用：{_e("；".join(c["references"]) or "需人工判定")}</div>'
+            + (f'<div class="caveat">⚠ {_e(c["caveat"])}</div>' if c["caveat"] else "")
+            + (f'<div class="refs">处置：{_e(c["action"])}</div>' if c["action"] else "")
+            + '</td></tr>'
+        )
+    out.append('</tbody></table>')
+
+    out.append(
+        '<details class="notes" style="margin-top:14px"><summary>法条目录（'
+        f'{len(COMP.REFS)} 条 · 含效力层级与核实状态）</summary><ul class="claws">'
+    )
+    for r in COMP.legal_catalog():
+        out.append(
+            f'<li><b>{_e(r["label"])}</b> · {_e(r["title"])} '
+            f'<span class="pill cred">{_e(r["level"])}</span> '
+            f'<span class="dim">{_e(r["verification"])}</span><br>'
+            f'<span class="dim">{_e(r["gist"])}</span></li>'
+        )
+    out.append('</ul></details>')
+
+    out.append(
+        '<div class="cnotice warnc" style="margin-top:14px"><b>待补充信息缺口</b>'
+        '（扫描器无法从文件判断，须由合规人员逐项补齐）：<ul class="gaps" style="margin-top:8px">'
+    )
+    for g in COMP.GAPS:
+        out.append(f'<li>{_e(g)}</li>')
+    out.append('</ul></div>')
+    out.append(
+        f'<p class="cnotice">{_e(cp["disclaimer"])}<br>{_e(cp["notice"])}</p>'
+    )
+    return "\n".join(out)
+
+
+def _baseline_section(result: ScanResult) -> str:
+    b = getattr(result, "baseline_block", None)
+    if not b:
+        return ""
+    c = b["counts"]
+    out = [
+        '<h2>增量对比（相对上次扫描）</h2>',
+        f'<div class="cnotice">身份键 = 实体 + 值指纹，与文件位置无关；'
+        f'值消失即视为已修复，换文件不算新增。基线：'
+        f'<span class="mono">{_e(Path(b["file"]).name)}</span>'
+        f'（{b["baseline_total"]} 条，扫描于 {_e(b["scan_started_at"] or "未知")}）。'
+        + ('<b>注意：该基线为旧版脱敏报告，缺值指纹，已退回按可见文本比对，结论可能不准。</b>'
+           if b["degraded"] else '')
+        + f'<br>{_e(b["note"])}</div>',
+        '<div class="ckpis">'
+        f'<div class="ckpi"><div class="n hot">{c["new"]}</div><div class="l">新增</div></div>'
+        f'<div class="ckpi"><div class="n">{c["persistent"]}</div><div class="l">仍在</div></div>'
+        f'<div class="ckpi"><div class="n">{c["fixed"]}</div><div class="l">已修复</div></div>'
+        f'<div class="ckpi"><div class="n">{len(result.findings)}</div><div class="l">本次命中</div></div>'
+        '</div>',
+    ]
+    for title, key, cls in (("新增（需优先处置）", "new", "new"),
+                            ("已修复", "fixed", "fixed")):
+        rows = b[key]
+        if not rows:
+            continue
+        out.append(f'<h3 style="font-size:13px;margin:14px 0 8px">{title} · {len(rows)}</h3>')
+        out.append('<table class="ctab"><thead><tr><th>实体</th><th>规则</th>'
+                   '<th>值（截断）</th><th>位置 / 次数</th></tr></thead><tbody>')
+        for r in rows[:50]:
+            src = ", ".join(Path(x).name for x in r.get("sources", [])[:3])
+            rule = r.get("rule_id") or ", ".join(r.get("rule_ids", []))
+            out.append(
+                '<tr>'
+                f'<td><span class="bdelta {cls}">{cls}</span> {_e(r["entity"])}</td>'
+                f'<td class="mono">{_e(rule)}</td>'
+                f'<td class="mono">{_e(r.get("value", ""))}</td>'
+                f'<td class="dim">{_e(src)} · {r.get("count", 1)} 次</td>'
+                '</tr>'
+            )
+        out.append('</tbody></table>')
+        if len(rows) > 50:
+            out.append(f'<p class="dim">仅展示前 50 条，完整清单见 JSON 报告 baseline 块。</p>')
+    return "\n".join(out)
 
 
 def _validation_chip(v: str) -> str:
@@ -481,6 +616,44 @@ details.inline{display:inline-block;margin-left:10px;font-size:12px}
 details.inline summary{color:#2563eb;cursor:pointer;list-style:none;display:inline}
 details.inline summary::-webkit-details-marker{display:none}
 footer{color:#9ca3af;font-size:12px;margin-top:26px;text-align:center}
+/* 合规映射 */
+.cnotice{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a5f;border-radius:8px;
+  padding:12px 16px;font-size:12.5px;line-height:1.7;margin-bottom:14px}
+.cnotice.warnc{background:#fffbeb;border-color:#fde68a;color:#78350f}
+.cnotice b{color:#b91c1c}
+.ckpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.ckpi{background:#fff;border:1px solid #e5e7eb;border-radius:9px;padding:13px 16px}
+.ckpi .n{font-size:24px;font-weight:700;color:#374151}
+.ckpi .n.hot{color:#b91c1c}
+.ckpi .l{font-size:12px;color:#6b7280;margin-top:2px}
+table.ctab{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;
+  border-radius:8px;overflow:hidden;font-size:12.5px}
+table.ctab th{font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;
+  text-align:left;padding:9px 10px;border-bottom:1px solid #e5e7eb;background:#fafbfc;font-weight:600}
+table.ctab td{padding:9px 10px;border-bottom:1px solid #f1f3f5;vertical-align:top}
+table.ctab tr:last-child td{border-bottom:none}
+table.ctab .mono{font:11.5px ui-monospace,Consolas,monospace}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px;white-space:nowrap}
+.pill.sens{background:#fee2e2;color:#991b1b}
+.pill.gb{background:#fef3c7;color:#92400e}
+.pill.pi{background:#dbeafe;color:#1e40af}
+.pill.dev{background:#e0e7ff;color:#3730a3}
+.pill.cred{background:#f1f5f9;color:#475569}
+.pill.tech{background:#f1f5f9;color:#475569}
+.pill.unk{background:#f3f4f6;color:#6b7280}
+.pill.pia-y{background:#fee2e2;color:#991b1b}
+.pill.pia-c{background:#fef3c7;color:#92400e}
+.pill.pia-n{background:#f1f5f9;color:#64748b}
+.caveat{color:#92400e;font-size:11.5px;line-height:1.55;margin-top:4px}
+.refs{color:#6b7280;font-size:11px;line-height:1.5;margin-top:4px}
+.gaps{columns:2;column-gap:28px;font-size:12.5px;color:#4b5563}
+.gaps li{margin:5px 0;break-inside:avoid}
+.claws{font-size:11.5px;color:#4b5563;line-height:1.6}
+.claws li{margin:5px 0}
+.bdelta{display:inline-block;padding:1px 7px;border-radius:10px;font-size:10.5px}
+.bdelta.new{background:#fee2e2;color:#991b1b}
+.bdelta.persistent{background:#fef3c7;color:#92400e}
+.bdelta.fixed{background:#dcfce7;color:#166534}
 @media print{
   body{background:#fff;font-size:11px}
   .toolbar{display:none}
@@ -600,7 +773,7 @@ def write_html(result: ScanResult, path: Path, redact: bool = False) -> None:
     <b>{s.bytes_read / 1024:.0f}</b> KB · <b>{result.duration_ms}</b> ms
   </div>
   <div class="sub">
-    规则 <b>{len(RULES)}</b> · 阈值 <b>{result.min_confidence}</b> ·
+    规则 <b>{len(getattr(result, "rules_used", ()) or RULES)}</b> · 阈值 <b>{result.min_confidence}</b> ·
     白名单 <b>{result.whitelist_size}</b> · {datetime.now().strftime("%Y-%m-%d %H:%M")}
     <details class="inline"><summary>降噪漏斗</summary>：候选 {s.candidates} → 淘汰 {s.rejected}
     → 缺上下文 {s.suppressed_context} → 低置信 {s.suppressed_threshold}
@@ -641,6 +814,10 @@ def write_html(result: ScanResult, path: Path, redact: bool = False) -> None:
   <div class="panel">{_hot_files(result, bases)}</div>
 
   {_spread(result, bases, redact)}
+
+  {_baseline_section(result)}
+
+  {_compliance_section(result)}
 
   <h2>明细</h2>
   <div class="toolbar">

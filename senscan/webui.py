@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from . import baseline as BL
+from . import custom_rules as CR
 from . import pcap as pcapmod
 from . import report
 from . import verify as VER
@@ -151,6 +153,13 @@ def _run_scan(job: Job, opts: dict[str, Any]) -> None:
         if cfg is not None and cfg.online:
             job.phase = "扫描中 · 完成后执行在线验证"
 
+        rules = None
+        if opts.get("rules_text"):
+            rules = CR.load_text(str(opts["rules_text"]))
+        baseline_path = str(opts.get("baseline_path") or "").strip() or None
+        if baseline_path:
+            BL.load(baseline_path)          # 启动期校验，坏基线不当成静默 0 结果
+
         def on_progress(done: int, total: int, path: Path) -> bool:
             if job.cancelled:
                 return False
@@ -168,6 +177,9 @@ def _run_scan(job: Job, opts: dict[str, Any]) -> None:
             enable_container=not bool(opts.get("no_container")),
             verify_config=cfg,
             on_progress=on_progress,
+            rules=rules,
+            baseline_path=baseline_path,
+            redact=bool(opts.get("redact")),
         )
         if job.cancelled:  # 文件数为 0 时回调不会触发，也要响应停止
             raise ScanCancelled("扫描已停止")
@@ -201,6 +213,13 @@ def _preflight(opts: dict[str, Any]) -> None:
         shown = "；".join(missing[:3])
         more = f" 等 {len(missing)} 个" if len(missing) > 3 else ""
         raise FileNotFoundError(f"路径不存在：{shown}{more}")
+    # 自定义规则与基线在启动期校验：坏文件当场 400，别等后台线程扫一半才炸，
+    # 也避免用户看到一张「0 命中」的看板以为没问题。
+    if opts.get("rules_text"):
+        CR.load_text(str(opts["rules_text"]))
+    bp = str(opts.get("baseline_path") or "").strip()
+    if bp:
+        BL.load(bp)
     empty = [p for p in raw
              if Path(p).expanduser().is_file() and Path(p).expanduser().stat().st_size == 0]
     if empty:
@@ -408,7 +427,8 @@ class Handler(BaseHTTPRequestHandler):
                 # 能力指纹：老进程没有这个接口，前端会直接提示重启工作台。
                 self._json({"version": __version__, "pid": os.getpid(),
                             "started_at": _STARTED_AT, "rules": len(RULES),
-                            "container": True, "preflight": True, "clear": True})
+                            "container": True, "preflight": True, "clear": True,
+                            "p1": True})
             elif u.path == "/api/job":
                 job = STATE["jobs"].get(q.get("id", ""))
                 if job is None:

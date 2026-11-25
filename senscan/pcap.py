@@ -172,12 +172,14 @@ def iter_frames(path: Path, timeout: int = DEFAULT_TIMEOUT):
             )
 
 
-def scan_pcap(path: Path, min_confidence: float, stats: dict) -> list[Finding]:
+def scan_pcap(path: Path, min_confidence: float, stats: dict,
+              rules: tuple | None = None) -> list[Finding]:
     findings: list[Finding] = []
     # contextlib.closing 保证提前退出时 tshark 管道也被关闭
+    kw = {"rules": rules} if rules is not None else {}
     with contextlib.closing(iter_frames(path)) as frames:
         for frame, text in frames:
-            got = detectors.detect(text, str(path.resolve()), min_confidence, stats)
+            got = detectors.detect(text, str(path.resolve()), min_confidence, stats, **kw)
             for f in got:
                 f.line = frame          # pcap 场景下"行号"即帧号
                 f.column = 1

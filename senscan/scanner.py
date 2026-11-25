@@ -15,7 +15,8 @@ from . import detectors
 from . import pcap as pcapmod
 from . import utils as U
 from . import verify as VER
-from .models import Finding
+from .models import Finding, Rule
+from .rules import RULES
 from .verify import VerifyConfig
 from .whitelist import Whitelist
 
@@ -73,6 +74,12 @@ class ScanResult:
     min_confidence: float
     whitelist_size: int = 0
     verification: dict = field(default_factory=dict)
+    # 本次实际生效的规则集（内置 + --rules-file 自定义）。报告层用它生成
+    # rule_catalog 与 SARIF rules，避免自定义规则扫出来了却在报告里查不到。
+    rules_used: tuple[Rule, ...] = ()
+    # --baseline 比对结果；None 表示未启用。报告层各格式共享同一份，不重复计算。
+    baseline_block: dict | None = None
+    # 合规映射为纯函数派生，不存结果；见 report._compliance_payload。
 
     @property
     def by_entity(self) -> dict[str, int]:
@@ -208,7 +215,8 @@ def _detect_encoding(head: bytes) -> str:
     return "latin-1"
 
 
-def _scan_large(path: Path, source: str, min_confidence: float, stats: ScanStats) -> list[Finding]:
+def _scan_large(path: Path, source: str, min_confidence: float, stats: ScanStats,
+                rules: tuple[Rule, ...] | None = None) -> list[Finding]:
     """超大文件按行切块流式处理，块边界落在行首，并保留尾部重叠区。
 
     PEM 私钥、JSON 字段值等规则会跨多行；若块间零重叠，恰好被切开的命中
@@ -233,8 +241,9 @@ def _scan_large(path: Path, source: str, min_confidence: float, stats: ScanStats
         if not chunk:
             return
         carry_lines = prefix.count("\n")
+        kw = {"rules": rules} if rules is not None else {}
         got = detectors.detect(chunk, source, min_confidence, sub,
-                               line_offset=line_offset - carry_lines)
+                               line_offset=line_offset - carry_lines, **kw)
         for f in got:
             f.offset += base_offset - len(prefix)
             key = (f.rule_id, f.normalized or f.value, f.line, f.offset)
@@ -292,12 +301,19 @@ def scan(
     enable_container: bool = True,
     verify_config: VerifyConfig | None = None,
     on_progress: ProgressCallback | None = None,
+    rules: tuple[Rule, ...] | None = None,
+    baseline_path: str | Path | None = None,
+    redact: bool = False,
 ) -> ScanResult:
     """遍历目标并执行检测。
 
     on_progress 在每处理一个文件前调用，供 UI 显示真实进度；返回 False 则
     抛出 ScanCancelled，实现协作式中止（无需强杀线程）。CLI 不传此参数。
+    rules 为合并自定义规则后的规则集；baseline_path 指向上次 JSON 报告，
+    启用后 ScanResult.baseline_block 携带三态结果。
     """
+    active_rules = rules if rules is not None else RULES
+    rule_kw = {"rules": active_rules}
     t0 = time.perf_counter()
     started_at = datetime.now().isoformat(timespec="seconds")
     stats = ScanStats()
@@ -339,7 +355,7 @@ def scan(
             stats.bytes_read += size
             sub: dict = {}
             try:
-                found = pcapmod.scan_pcap(path, min_confidence, sub)
+                found = pcapmod.scan_pcap(path, min_confidence, sub, active_rules)
             except (RuntimeError, OSError) as exc:
                 stats.files_skipped += 1
                 stats.skipped.append(f"{path} (pcap 解析失败: {exc})")
@@ -372,7 +388,7 @@ def scan(
                         stats.locale_entries += 1
                         threshold += LOCALE_PENALTY
                     got = detectors.detect(blob.text, src, threshold, sub,
-                                           strings_dump=blob.binary)
+                                           strings_dump=blob.binary, **rule_kw)
                     for f in got:
                         f.extra.setdefault("container", blob.kind)
                         f.extra.setdefault("container_file", source)
@@ -405,7 +421,7 @@ def scan(
         stats.bytes_read += size
 
         if size > max_bytes:
-            found = _scan_large(path, source, min_confidence, stats)
+            found = _scan_large(path, source, min_confidence, stats, active_rules)
         else:
             try:
                 text, _enc = U.read_text(path)
@@ -414,7 +430,7 @@ def scan(
                 stats.skipped.append(f"{path} ({exc})")
                 continue
             sub = {}
-            found = detectors.detect(text, source, min_confidence, sub)
+            found = detectors.detect(text, source, min_confidence, sub, **rule_kw)
             stats.absorb(sub)
 
         all_findings.extend(_apply_whitelist(found, whitelist, stats))
@@ -441,7 +457,13 @@ def scan(
         duration_ms=int((time.perf_counter() - t0) * 1000),
         min_confidence=min_confidence,
         whitelist_size=len(whitelist) if whitelist else 0,
+        rules_used=active_rules,
     )
+    if baseline_path is not None:
+        from . import baseline as BL
+        result.baseline_block = BL.compare(
+            findings, BL.load(baseline_path), redact=redact
+        )
     if verify_config is not None:
         summary = VER.run(findings, verify_config)
         result.verification = summary.to_dict()

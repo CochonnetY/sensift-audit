@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "senscan"
-version = "0.2.0"
+version = "0.3.0"
 description = "敏感实体自动提取审计器：从日志/配置/埋点数据中提取凭据与设备标识"
 readme = "README.md"
 requires-python = ">=3.10"

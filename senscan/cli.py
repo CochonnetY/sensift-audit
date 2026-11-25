@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import baseline as BL
+from . import custom_rules as CR
 from . import report
 from .models import Risk
 from .scanner import scan
@@ -28,6 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  senscan app.log dump.json -o out -w wl.txt\n"
             "  senscan ./firmware-out -m 0.7 --fail-on critical\n"
             "  senscan ./logs --verify-local\n"
+            "  senscan ./logs --baseline reports/senscan-20261101.json --fail-on none\n"
+            "  senscan ./logs --rules-file my-rules.json\n"
             "  senscan ui --port 8777\n"
         ),
     )
@@ -35,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--outdir", default="senscan-reports", help="输出目录（默认 senscan-reports）")
     p.add_argument("-f", "--format", default="json,csv,sarif,html", help="格式，逗号分隔：json,csv,sarif,html")
     p.add_argument("-w", "--whitelist", help="白名单文件")
+    p.add_argument("--rules-file", help="外部规则 JSON 文件（内置规则 + 自定义规则）")
+    p.add_argument("--baseline", help="上次扫描的 JSON 报告，输出新增/仍在/已修复三态")
     p.add_argument("-m", "--min-confidence", type=float, default=0.55, help="置信度阈值（默认 0.55）")
     p.add_argument("--include-binary", action="store_true", help="扫描二进制（误报会增多）")
     p.add_argument("--no-pcap", action="store_true", help="不解析抓包（默认用 tshark 抽明文）")
@@ -110,6 +116,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"错误：{exc}", file=sys.stderr)
             return 1
 
+    rules = None
+    if args.rules_file:
+        try:
+            rules = CR.load(Path(args.rules_file))
+        except CR.RuleFileError as exc:
+            print(f"错误：自定义规则加载失败 {exc}", file=sys.stderr)
+            return 1
+        from .rules import RULES
+        print(f"自定义规则已加载：{len(rules) - len(RULES)} 条（合计 {len(rules)} 条）")
+
+    if args.baseline:
+        try:
+            BL.load(Path(args.baseline))
+        except BL.BaselineError as exc:
+            print(f"错误：基线加载失败 {exc}", file=sys.stderr)
+            return 1
+
     verify_config = None
     if args.verify_local or args.verify_online or args.verify_config:
         data: dict = {}
@@ -149,8 +172,11 @@ def main(argv: list[str] | None = None) -> int:
             enable_pcap=not args.no_pcap,
             enable_container=not args.no_container,
             verify_config=verify_config,
+            rules=rules,
+            baseline_path=args.baseline,
+            redact=args.redact,
         )
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BL.BaselineError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
 

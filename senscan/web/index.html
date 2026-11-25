@@ -274,6 +274,19 @@ tr:last-child td{border-bottom:0}
       <label title="每行一条：值 / 实体:值 / regex: / 通配符；# 开头为注释">白名单 · 可选</label>
       <textarea id="wl" spellcheck="false" placeholder="# 已知安全的测试值&#10;MAC:001a2b3c4d5e"></textarea>
     </div>
+    <div class="field" style="margin-top:10px">
+      <label title="上次扫描导出的 JSON 报告路径；填了就输出新增/仍在/已修复">基线报告 · 可选</label>
+      <input type="text" id="baselinePath" spellcheck="false" placeholder="C:\reports\senscan-20261101-....json">
+    </div>
+    <details style="margin-top:10px">
+      <summary style="font-size:12px;color:var(--muted);cursor:pointer">自定义规则 JSON · 可选</summary>
+      <div class="field" style="margin-top:8px">
+        <label title="内置规则 + 自定义规则；数组或含 rules 数组的对象">粘贴规则 JSON</label>
+        <textarea id="rulesText" spellcheck="false" style="min-height:88px;font:11.5px ui-monospace,Consolas,monospace"
+          placeholder='[{"id":"corp-tok","entity":"TOKEN","pattern":"corp_tok_([A-Za-z0-9]{24,})","risk":"high","base_confidence":0.85}]'></textarea>
+      </div>
+      <p class="tiny dim" style="margin-top:6px">仅接受正则与白名单校验器，id 不得与内置规则重复；启动时校验，坏规则当场报错。</p>
+    </details>
 
     <h3><span class="n">3</span>验证</h3>
     <div class="checks">
@@ -325,6 +338,7 @@ tr:last-child td{border-bottom:0}
       <button class="tab on" data-tab="overview">概览</button>
       <button class="tab" data-tab="findings">明细<span class="cnt" id="tabCount">0</span></button>
       <button class="tab" data-tab="rules">规则<span class="cnt" id="ruleCount">0</span></button>
+      <button class="tab" data-tab="compliance">合规映射</button>
       <button class="tab" data-tab="audit">审计</button>
     </nav>
 
@@ -401,6 +415,32 @@ tr:last-child td{border-bottom:0}
         <th>风险</th><th>来源</th><th>说明</th></tr></thead><tbody id="ruleRows"></tbody></table></div>
     </section>
 
+    <section class="pane hide" id="pane-compliance">
+      <div id="compEmpty" class="empty"><div class="ico">§</div><h2>暂无结果</h2>
+        <p>完成一次扫描后，这里按 PIPL / GB/T 35273 口径给出数据分类、法条依据与 PIA 触发提示。</p></div>
+      <div id="compBody" class="hide">
+        <div class="notice" style="margin-bottom:14px;line-height:1.7">
+          <b>口径提醒</b>：PIPL 第 28 条法定「敏感个人信息」与 GB/T 35273-2020 附录 B 表 B.1
+          「个人敏感信息」范围不同，后者更宽（含个人电话号码、邮箱及口令）。二者不得直接等同；
+          凭据类通常是组织资产，不硬套个人信息主体权利条款。
+          <span id="compLevel" class="tiny dim" style="display:block;margin-top:6px"></span></div>
+        <div class="kpis" id="compKpis"></div>
+        <div class="panel" style="margin-bottom:14px"><h4>实体分类与法条依据 <span id="compMeta"></span></h4>
+          <div class="tablebox"><table><thead><tr>
+            <th>实体 / 命中</th><th>数据分类</th><th>PIPL 口径</th><th>GB/T 35273 口径</th>
+            <th>PIA 触发</th><th>依据与适用条款</th>
+          </tr></thead><tbody id="compRows"></tbody></table></div></div>
+        <div class="panel hide" id="compBaselinePanel" style="margin-bottom:14px">
+          <h4>增量对比 <span id="compBaselineMeta"></span></h4><div id="compBaseline"></div></div>
+        <div class="panels">
+          <div class="panel"><h4>待补充信息缺口</h4><ul id="compGaps" style="padding-left:18px;font-size:12.5px;line-height:1.7"></ul></div>
+          <div class="panel"><h4>法条目录 <span class="tiny dim" id="compLawCount"></span></h4>
+            <div id="compLaws" style="max-height:280px;overflow:auto;font-size:11.5px;line-height:1.6"></div></div>
+        </div>
+        <div class="notice red" style="margin-top:14px;line-height:1.7" id="compDisclaimer"></div>
+      </div>
+    </section>
+
     <section class="pane hide" id="pane-audit">
       <div class="panel" style="margin-bottom:14px"><h4>审计日志 <span id="auditPath"></span></h4>
         <p class="tiny dim">每次在线验证写一行 JSONL，只记<b>值 SHA-256 前 16 位</b>，不含原值。</p>
@@ -474,7 +514,12 @@ async function init(){
     const p = await api("/api/ping");
     if(!p.container || !p.preflight) throw new Error("后端能力过旧");
     S.backendStale = false;
+    S.hasP1 = !!p.p1;
     S.hasClear = !!p.clear;
+    if(!p.p1) {
+      $("baselinePath").disabled = true; $("rulesText").disabled = true;
+      $("baselinePath").title = "后端版本过旧，请重启工作台以启用基线/自定义规则";
+    }
     $("clearBtn").disabled = !p.clear;
     $("clearBtn").title = p.clear
       ? "清空当前扫描结果、任务历史与在线验证审计记录（已导出的文件不受影响）"
@@ -483,8 +528,9 @@ async function init(){
       `后端 v${p.version} · PID ${p.pid} · 启动 ${p.started_at} · 容器拆解可用`;
   }catch(e){
     S.backendStale = true;
-    S.hasClear = false;
+    S.hasClear = false; S.hasP1 = false;
     $("clearBtn").disabled = true;
+    $("baselinePath").disabled = true; $("rulesText").disabled = true;
     $("backendInfo").innerHTML = '<b style="color:#a5251a">⚠ 工作台前后端不匹配：同一端口可能同时跑着多个 senscan ui，'
       + '或后端是旧进程，「拆解容器」等勾选不会生效。请结束所有旧进程，或换端口重新启动。</b>';
   }
@@ -523,6 +569,7 @@ function collectOpts(){
     paths, min_confidence:parseFloat($("conf").value),
     whitelist_text:pickText("wl"), include_binary:$("binary").checked,
     no_pcap:!$("pcap").checked, no_container:!$("container").checked, max_file_mb:512, redact:$("redact").checked,
+    baseline_path:pickText("baselinePath").trim(), rules_text:pickText("rulesText").trim(),
     authorized:$("vAuthorized").checked, confirm_phrase:pickText("confirmPhrase").trim(),
     verify:{
       local:$("vLocal").checked, online,
@@ -535,6 +582,8 @@ function collectOpts(){
 }
 function validateOpts(o){
   if(!o.paths.length) return "请填写至少一个路径";
+  if((o.baseline_path||o.rules_text) && !S.hasP1)
+    return "后端版本过旧，不支持基线/自定义规则；请重启工作台进程后再试";
   if(o.verify.online){
     if(pickText("confirmPhrase").trim()!=="允许在线验证") return "请输入「允许在线验证」";
     if(!$("vAuthorized").checked) return "请先勾选授权";
@@ -688,7 +737,68 @@ function renderAll(){
     sp.slice(0,8).map(x=>`<tr><td class="mono">${esc(x.entity)}</td>
       <td class="code">${esc(short($("maskVals").checked?mask(x.value):x.value,26))}</td><td><b>${x.files.length}</b></td></tr>`).join("")+
     "</tbody></table>":'<p class="dim">无跨文件重复值</p>';
-  fillFilters(f); applyFilters();
+  fillFilters(f); renderCompliance(d);
+  applyFilters();
+}
+
+// ---------------------------------------------------------------- 合规映射
+const C_PILL={"pipl_sensitive":"b-critical","gb_sensitive":"b-high","pi_general":"b-low",
+              "device_identifier":"b-medium","credential":"","technical":"","unclassified":""};
+const P_PILL={triggered:"b-critical",conditional:"b-high",not_applicable:""};
+function renderCompliance(d){
+  const c=d.compliance, b=d.baseline;
+  $("compEmpty").classList.toggle("hide",!!c);
+  $("compBody").classList.toggle("hide",!c);
+  if(!c) return;
+  const s=c.summary||{};
+  $("compLevel").textContent=c.level_note+"　"+c.version_note;
+  $("compKpis").innerHTML=[
+    ["法定敏感个人信息",s.pipl_sensitive_count||0,"red","PIPL 第 28 条"],
+    ["国标敏感（口径更宽）",s.gb_sensitive_count||0,"orange","GB/T 35273 附录 B"],
+    ["明确触发事前 PIA",(s.by_pia_trigger||{}).triggered||0,"red","第 55 条第（一）项"],
+    ["需人工判定的实体",s.needs_review_count||0,"","结合处理场景"]
+  ].map(([l,n,cl,sub])=>`<div class="kpi ${cl}"><div class="lbl">${esc(l)}</div>
+    <div class="num">${n}</div><div class="sub">${esc(sub)}</div></div>`).join("");
+  const ent=Object.entries(c.by_entity||{}), counts=(d.summary||{}).by_entity||{};
+  ent.sort((a,b2)=>(counts[b2[0]]||0)-(counts[a[0]]||0));
+  $("compMeta").textContent=`${ent.length} 类实体 · ${s.total||0} 条命中`;
+  $("compRows").innerHTML=ent.map(([k,v])=>`<tr>
+    <td class="mono">${esc(k)}<br><span class="tiny dim">${counts[k]||0} 条</span></td>
+    <td><span class="badge ${C_PILL[v.data_category]||""}">${esc(v.data_category_label)}</span></td>
+    <td>${esc(v.pipl_class)}</td><td>${esc(v.gb35273_class)}</td>
+    <td><span class="badge ${P_PILL[v.pia_trigger]||""}">${esc(v.pia_label)}</span></td>
+    <td style="min-width:280px">${esc(v.basis)}
+      <div class="tiny dim" style="margin-top:4px">${esc((v.references||[]).join("；")||"需人工判定")}</div>
+      ${v.caveat?`<div class="tiny" style="color:#a16207;margin-top:4px">⚠ ${esc(v.caveat)}</div>`:""}
+      ${v.action?`<div class="tiny dim" style="margin-top:4px">处置：${esc(v.action)}</div>`:""}
+    </td></tr>`).join("")||`<tr><td colspan="6" class="dim">无命中</td></tr>`;
+  $("compGaps").innerHTML=(c.gaps||[]).map(g=>`<li>${esc(g)}</li>`).join("");
+  const laws=c.legal_catalog||[];
+  $("compLawCount").textContent=`${laws.length} 条`;
+  $("compLaws").innerHTML=laws.map(r=>`<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px solid var(--line2)">
+    <b>${esc(r.label)}</b> · ${esc(r.title)} <span class="tiny dim">[${esc(r.level)} · ${esc(r.verification)}]</span>
+    <div class="tiny dim" style="margin-top:3px">${esc(r.gist)}</div></div>`).join("");
+  $("compDisclaimer").innerHTML=esc(c.disclaimer)+"<br>"+esc(c.notice||"");
+  const hasB=!!(b&&b.enabled);
+  $("compBaselinePanel").classList.toggle("hide",!hasB);
+  if(hasB){
+    const n=b.counts||{};
+    $("compBaselineMeta").textContent=`基线 ${b.baseline_total||0} 条`;
+    const row=(title,key,cl)=>{
+      const list=b[key]||[]; if(!list.length) return "";
+      return `<div style="margin-bottom:10px"><b>${title} · ${list.length}</b>
+        <table style="margin-top:6px"><thead><tr><th>实体</th><th>值</th><th>位置</th></tr></thead><tbody>`+
+        list.slice(0,12).map(x=>`<tr><td><span class="badge ${cl}">${esc(x.entity)}</span></td>
+          <td class="mono">${esc(short(x.value||"",40))}</td>
+          <td class="tiny dim">${esc((x.sources||[]).map(p=>String(p).split(/[\\/]/).pop()).join("、"))}</td></tr>`).join("")+
+        `</tbody></table>${list.length>12?`<p class="tiny dim">仅显示前 12 条，完整清单见 JSON 报告</p>`:""}</div>`;
+    };
+    $("compBaseline").innerHTML=`<div class="kpis" style="margin-bottom:12px">`+
+      [["新增",n.new||0,"red"],["仍在",n.persistent||0,"orange"],["已修复",n.fixed||0,"green"]]
+      .map(([l,v,cl])=>`<div class="kpi ${cl}"><div class="lbl">${esc(l)}</div><div class="num">${v}</div></div>`).join("")+
+      `</div><div class="notice" style="margin-bottom:10px">${esc(b.note||"")}</div>`+
+      row("新增","new","b-critical")+row("已修复","fixed","b-low");
+  }
 }
 
 // ---------------------------------------------------------------- 明细
@@ -909,7 +1019,9 @@ function resetView(){
   $("overviewBody").classList.add("hide");
   $("tabCount").textContent="0";
   ["kpis","riskBars","legend","batches","funnel","verifySummary","hotFiles","spread",
-   "diagBody"].forEach(id=>$(id).innerHTML="");
+   "diagBody","compKpis","compRows","compGaps","compLaws","compBaseline"].forEach(id=>$(id).innerHTML="");
+  $("compEmpty").classList.remove("hide"); $("compBody").classList.add("hide");
+  $("compBaselinePanel").classList.add("hide");
   $("donutNum").textContent="0";
   $("donut").style.background="conic-gradient(#e3e8f0 0 100%)";
   $("scanMeta").textContent=""; $("diagMeta").textContent="";
@@ -965,7 +1077,7 @@ $("browsePick").onclick=()=>{
 };
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on")); b.classList.add("on");
-  ["overview","findings","rules","audit"].forEach(k=>
+  ["overview","findings","rules","compliance","audit"].forEach(k=>
     $("pane-"+k).classList.toggle("hide",k!==b.dataset.tab));
   if(b.dataset.tab==="audit") refreshAudit();
 });

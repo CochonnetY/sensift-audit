@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 from pathlib import Path
 
+from . import compliance as COMP
 from . import utils as U
 from . import verify as VER
 from .models import CATEGORY_LABEL, Finding
@@ -75,7 +76,17 @@ def _display_value(f: Finding, redact: bool) -> str:
 # ---------------------------------------------------------------- JSON
 
 
-def _rule_catalog() -> list[dict]:
+def _rules_of(result: ScanResult) -> tuple:
+    """兼容旧 ScanResult / 测试桩对象：没有 rules_used 就退回内置规则。"""
+    return getattr(result, "rules_used", ()) or RULES
+
+
+def _baseline_of(result: ScanResult) -> dict | None:
+    return getattr(result, "baseline_block", None)
+
+
+def _rule_catalog(result: ScanResult) -> list[dict]:
+    active = _rules_of(result)
     return [
         {
             "id": r.id,
@@ -83,15 +94,31 @@ def _rule_catalog() -> list[dict]:
             "category": r.category,
             "risk": r.risk.value,
             "source": r.source,
+            "custom": r.source == "custom" or r not in RULES,
         }
-        for r in RULES
+        for r in active
     ]
 
 
+def _baseline_public(result: ScanResult) -> dict | None:
+    """增量块的对外视图：status_by_key 是内部索引，不写进报告。"""
+    b = _baseline_of(result)
+    if not b:
+        return None
+    return {k: v for k, v in b.items() if k != "status_by_key"}
+
+
 def _payload(result: ScanResult, redact: bool) -> dict:
+    from . import baseline as BL
     findings = []
     for f in result.findings:
         d = f.to_dict()
+        # 值指纹与脱敏无关，供跨次基线比对（不含明文）。
+        d["fingerprint"] = BL.fingerprint(f)
+        d["compliance"] = COMP.annotate(f.entity)
+        st = BL.status_for(_baseline_of(result), f)
+        if st:
+            d["baseline_status"] = st
         if redact:
             d["value"] = U.redact(f.value, 4)
             if f.context_parts:
@@ -109,7 +136,10 @@ def _payload(result: ScanResult, redact: bool) -> dict:
             "started_at": result.started_at,
             "duration_ms": result.duration_ms,
             "min_confidence": result.min_confidence,
-            "rules_total": len(RULES),
+            "rules_total": len(_rules_of(result)),
+            "custom_rules": sum(
+                1 for r in _rules_of(result) if r not in RULES
+            ),
             "whitelist_entries": result.whitelist_size,
             "redacted": redact,
         },
@@ -150,8 +180,10 @@ def _payload(result: ScanResult, redact: bool) -> dict:
             ],
         },
         "verification": result.verification,
+        "compliance": COMP.build_payload([f.entity for f in result.findings]),
+        "baseline": _baseline_public(result),
         "findings": findings,
-        "rule_catalog": _rule_catalog(),
+        "rule_catalog": _rule_catalog(result),
     }
 
 
@@ -169,6 +201,8 @@ CSV_HEADER = [
     "priority", "risk", "risk_score", "confidence", "validation", "liveness",
     "category", "entity", "rule_id", "value", "occurrences",
     "source", "line", "column", "remediation", "reasons", "context",
+    "fingerprint", "data_category", "pipl_class", "gb35273_class",
+    "pia_trigger", "compliance_refs", "baseline_status",
 ]
 
 
@@ -193,11 +227,13 @@ def _report_context(f: Finding, redact: bool) -> str:
 
 
 def write_csv(result: ScanResult, path: Path, redact: bool = False) -> None:
+    from . import baseline as BL
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(CSV_HEADER)
         for f in result.findings:
+            c = COMP.for_entity(f.entity)
             row = [
                 f.priority,
                 f.risk.value,
@@ -216,6 +252,13 @@ def write_csv(result: ScanResult, path: Path, redact: bool = False) -> None:
                 f.remediation,
                 "; ".join(f.reasons),
                 _report_context(f, redact),
+                BL.fingerprint(f),
+                c.data_category,
+                c.pipl_class,
+                c.gb35273_class,
+                COMP.PIA_LABELS[c.pia_trigger],
+                "; ".join(COMP.ref_labels(c.refs)),
+                BL.status_for(_baseline_of(result), f) or "",
             ]
             w.writerow([_csv_safe(x) for x in row])
 
@@ -230,10 +273,13 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
     （0-10），不带它 GitHub 会把所有 error 都当 8.0 处理。`rank` 用于平台
     侧的结果排序。规则元数据从规则表生成，CI 平台里能看到完整说明。
     """
+    from . import baseline as BL
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    active = _rules_of(result)
     rule_meta: dict[str, dict] = {}
-    for r in RULES:
+    for r in active:
+        c = COMP.for_entity(r.entity)
         rule_meta[r.id] = {
             "id": r.id,
             "name": r.entity,
@@ -245,9 +291,17 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
             },
             "defaultConfiguration": {"level": r.risk.sarif_level},
             "properties": {
-                "tags": ["sensitive-data", "security", r.category, r.entity.lower()],
+                "tags": ["sensitive-data", "security", r.category, r.entity.lower(),
+                         f"compliance/{c.data_category}"],
                 "security-severity": r.risk.security_severity,
                 "precision": "high" if r.base_confidence >= 0.85 else "medium",
+                "compliance": {
+                    "data_category": c.data_category,
+                    "pipl_class": c.pipl_class,
+                    "gb35273_class": c.gb35273_class,
+                    "pia_trigger": c.pia_trigger,
+                    "references": COMP.ref_labels(c.refs),
+                },
             },
         }
     # 兜底：万一条目里的 rule_id 不在静态表（自定义规则注入时）
@@ -274,6 +328,8 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
             VER.value_fingerprint(f.normalized or f.value) if redact
             else (f.normalized or f.value[:32])
         )
+        comp = COMP.for_entity(f.entity)
+        st = BL.status_for(_baseline_of(result), f)
         results.append({
             "ruleId": f.rule_id,
             "ruleIndex": list(rule_meta).index(f.rule_id),
@@ -300,6 +356,9 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
                 "confidence": round(f.confidence, 3),
                 "validation": f.validation,
                 "liveness": VER.liveness_of(f),
+                "data_category": comp.data_category,
+                "pia_trigger": comp.pia_trigger,
+                **({"baseline_status": st} if st else {}),
             },
         })
 
@@ -351,6 +410,29 @@ def render_console(result: ScanResult, top: int = 20, redact: bool = False) -> s
     lines.append("风险分布  " + ("  ".join(parts) if parts else _c("无命中", "dim")))
     cat = "  ".join(f"{CATEGORY_LABEL.get(k, k)} {v}" for k, v in result.by_category.items())
     lines.append("类别分布  " + _c(cat if cat else "—", "dim"))
+
+    cp = COMP.build_payload([f.entity for f in result.findings])["summary"]
+    if cp["total"]:
+        lines.append(
+            _c("合规映射  ", "dim")
+            + f"法定敏感个人信息 {_c(str(cp['pipl_sensitive_count']), 'critical')}"
+            f" · 国标敏感（口径更宽） {cp['gb_sensitive_count']}"
+            f" · 组织凭据 {cp['credential_count']}"
+            f" · 明确触发 PIA {_c(str(cp['by_pia_trigger']['triggered']), 'critical')}"
+            f" · 需人工复核 {cp['needs_review_count']}"
+        )
+        lines.append(
+            _c("  ⓘ 分类仅作线索，非法律结论；PIPL 第 28 条与 GB/T 35273 附录 B 口径不同，"
+               "详见报告「合规映射」章节", "dim")
+        )
+    b = _baseline_of(result)
+    if b:
+        c = b["counts"]
+        lines.append(
+            _c("增量对比  ", "dim")
+            + f"新增 {_c(str(c['new']), 'critical')} · 仍在 {c['persistent']}"
+            f" · 已修复 {c['fixed']}（基线 {b['baseline_total']} 条）"
+        )
     if result.verification:
         v = result.verification
         lines.append(
