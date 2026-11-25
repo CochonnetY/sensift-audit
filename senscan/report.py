@@ -144,7 +144,8 @@ def _payload(result: ScanResult, redact: bool) -> dict:
                 for src, n, risk, score in result.by_file
             ],
             "spread_values": [
-                {"entity": e, "value": v, "files": sorted(set(srcs))}
+                {"entity": e, "value": U.redact(v, 4) if redact else v,
+                 "files": sorted(set(srcs))}
                 for e, v, srcs in result.spread_values
             ],
         },
@@ -267,6 +268,12 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
 
     results = []
     for f in result.findings:
+        # 指纹用于 Code Scanning 跨次去重，必须稳定。脱敏时改用原值的 sha256
+        # 短哈希：同一值仍得到同一指纹，但报告里不再残留明文凭据。
+        fp_value = (
+            VER.value_fingerprint(f.normalized or f.value) if redact
+            else (f.normalized or f.value[:32])
+        )
         results.append({
             "ruleId": f.rule_id,
             "ruleIndex": list(rule_meta).index(f.rule_id),
@@ -284,7 +291,7 @@ def write_sarif(result: ScanResult, path: Path, redact: bool = False) -> None:
                     "region": {"startLine": f.line, "startColumn": f.column},
                 }
             }],
-            "partialFingerprints": {"senscan/v1": f"{f.entity}:{f.normalized or f.value[:32]}"},
+            "partialFingerprints": {"senscan/v1": f"{f.entity}:{fp_value}"},
             "properties": {
                 "entity": f.entity,
                 "category": f.category,

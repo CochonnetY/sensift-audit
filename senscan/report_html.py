@@ -152,12 +152,13 @@ def _hot_files(result: ScanResult, bases: list[str], limit: int = 8) -> str:
     return "".join(out)
 
 
-def _spread(result: ScanResult, bases: list[str]) -> str:
+def _spread(result: ScanResult, bases: list[str], redact: bool = False) -> str:
     rows = result.spread_values
     if not rows:
         return ""
     lis = "".join(
-        f'<li><span class="mono">{_e(e)}</span> <code>{_e(_shorten(v, 48))}</code> '
+        f'<li><span class="mono">{_e(e)}</span> '
+        f'<code>{_e(_shorten(U.redact(v, 4) if redact else v, 48))}</code> '
         f'出现在 <b>{len(set(srcs))}</b> 个文件：'
         f'{_e("、".join(_rel(s, bases) for s in sorted(set(srcs))[:4]))}'
         f'{"…" if len(set(srcs)) > 4 else ""}</li>'
@@ -261,9 +262,14 @@ def _rows(result: ScanResult, redact: bool, bases: list[str]) -> str:
     out: list[str] = []
     for i, f in enumerate(result.findings, 1):
         loc = f"{_rel(f.source, bases)}:{f.line}:{f.column}"
-        search = " ".join([f.entity, f.risk.value, f.value, f.context, Path(f.source).name]).lower()
-        reasons = "".join(f"<li>{_e(r)}</li>" for r in f.reasons)
         ctx = U.redact(f.context, 8) if redact else f.context
+        # 搜索索引同样走脱敏口径：data-text 是可见 HTML 属性，不能藏明文
+        search = " ".join([
+            f.entity, f.risk.value,
+            U.redact(f.value, 4) if redact else f.value,
+            ctx, Path(f.source).name,
+        ]).lower()
+        reasons = "".join(f"<li>{_e(r)}</li>" for r in f.reasons)
         # 列表/悬浮提示用纯文本，⟦⟧ 边界标记只在详情和 JSON/CSV 里保留
         ctx_plain = ctx.replace(U.HIT_OPEN, "").replace(U.HIT_CLOSE, "")
         trip_chip = '<span class="trip-chip">三元组</span>' if f.extra.get("iot_triplet") else ""
@@ -299,7 +305,7 @@ def _rows(result: ScanResult, redact: bool, bases: list[str]) -> str:
             f'<p class="dlabel">原文（高亮部分＝命中值）</p>'
             f'<p class="ctxfull">{_context_html(f, redact)}</p>'
             f'<p class="dim">规则 <span class="mono">{_e(f.rule_id)}</span> · 归一化值 '
-            f'<code>{_e(_shorten(f.normalized or f.value, 64))}</code></p></div></details></td>'
+            f'<code>{_e(_shorten(U.redact(f.normalized or f.value, 4) if redact else (f.normalized or f.value), 64))}</code></p></div></details></td>'
             f'<td class="ctx ellip" title="{_e(ctx_plain)}">{_e(_shorten(ctx_plain, 240))}</td>'
             f"</tr>"
         )
@@ -634,7 +640,7 @@ def write_html(result: ScanResult, path: Path, redact: bool = False) -> None:
   <h2>热点文件</h2>
   <div class="panel">{_hot_files(result, bases)}</div>
 
-  {_spread(result, bases)}
+  {_spread(result, bases, redact)}
 
   <h2>明细</h2>
   <div class="toolbar">

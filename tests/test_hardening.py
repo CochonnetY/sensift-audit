@@ -75,6 +75,26 @@ class TestOutputSafety(unittest.TestCase):
         self.assertIn("'=HYPERLINK", body)
         self.assertIn("'=1+1", body)
 
+    def test_redact_covers_all_report_surfaces(self):
+        # 脱敏必须覆盖每个展示面：明细值、上下文、归一化值、搜索索引
+        # (data-text)、扩散面汇总 (spread_values)、SARIF 指纹。任一处漏掉
+        # 都会把明文凭据带进外发报告——这几处历史上分别漏过。
+        marker = "Zx9" + "!Kq7" + "mNp2wR"      # 拼接，避免形似真实凭据
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ("a.log", "b.log"):
+                (root / name).write_text(f"password={marker}\n", encoding="utf-8")
+            res = scanner.scan([str(root)])
+            self.assertTrue(any(f.value == marker for f in res.findings))
+            self.assertTrue(res.spread_values)   # 确保扩散面分支被覆盖
+            files = report.write_all(
+                res, root / "out", ("json", "csv", "sarif", "html"), redact=True
+            )
+            self.assertEqual(len(files), 4)
+            for p in files:
+                body = p.read_text(encoding="utf-8", errors="replace")
+                self.assertNotIn(marker, body, f"{p.name} 脱敏后仍含明文")
+
     def test_pcap_nonzero_exit_is_not_silent(self):
         class FakeProc:
             stdout = io.StringIO("")

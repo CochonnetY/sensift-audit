@@ -1,8 +1,8 @@
 # sensift-audit
 
-在日志、配置、埋点 JSON、固件产物、APK 包和 pcap 里翻找被人忘掉的密钥、令牌和个人信息，然后告诉你它在哪一行、有多可信、该先处理哪一条。
+在日志、配置、埋点 JSON、固件产物、APK 包和抓包里翻找被人忘掉的密钥、令牌和个人信息，然后告诉你它在哪一行、有多可信、该先处理哪一条。
 
-Python 3.10+，零第三方依赖。抓包解析需要系统里有 `tshark`（Wireshark 自带）；没装也能扫文本，只是 pcap 会被跳过。
+84 条规则 / 26 类实体。Python 3.10+，零第三方依赖。抓包解析需要系统里有 `tshark`（Wireshark 自带）；没装也能扫文本，只是抓包会被跳过。
 
 ## 跑起来
 
@@ -27,12 +27,12 @@ python -m senscan ui                          # 浏览器打开 http://127.0.0.1
 | 目标 | 怎么处理 |
 |---|---|
 | 日志 / 配置 / JSON / 源码 | 依次试 UTF-8、GBK、UTF-16 解码后直接扫 |
-| pcap / pcapng | 调 `tshark` 抽明文 HTTP 载荷；TLS 正文看不到 |
+| pcap / pcapng / 蓝牙 HCI | 调 `tshark` 抽明文字段（HTTP、TCP payload、BLE ATT）；TLS 正文看不到。工作台须勾选「解析抓包 (Wireshark)」，CLI 默认开启 |
 | APK / JAR / IPA | 解包：assets 等文本直扫，`classes.dex`、`.so`、`resources.arsc` 抽可打印串 |
 | Office / zip / tar / gz | Office 取正文 XML；压缩包递归两层，带 zip 炸弹防护 |
 | SQLite | 逐表逐列导出 `表.列=值`，列名当上下文 |
 
-包内命中定位写成 `app.apk!assets/config.json:12`，`!` 后面是包内路径。
+包内命中定位写成 `app.apk!assets/config.json:12`，`!` 后面是包内路径。容器默认开启（`--no-container` 可关）；抓包默认开启（`--no-pcap` 可关）。PDF、Git 历史、加密压缩包、TLS 解密、dex 反编译与脱壳不支持。
 
 | 类别 | 实体 | 风险 | 判定依据 |
 |---|---|---|---|
@@ -63,10 +63,16 @@ python -m senscan ui                          # 浏览器打开 http://127.0.0.1
 
 | 格式 | 什么时候用 |
 |---|---|
-| `html` | 单文件离线可开，发评审最省事。带筛选、排序、判定依据和处置建议 |
+| `html` | 单文件离线可开，发评审最省事。带筛选、排序、判定依据和处置建议；详情「原文」高亮命中值 |
 | `csv` | UTF-8 BOM，Excel 直接打开 |
 | `json` | 完整字段加各类汇总，给程序消费 |
-| `sarif` | SARIF 2.1.0，丢进 GitHub Code Scanning |
+| `sarif` | SARIF 2.1.0，丢进 GitHub Code Scanning；上传前加 `--redact` |
+
+工作台（`python -m senscan ui`）只监听 `127.0.0.1`，一次性 token 鉴权。**不保存扫描记录**：刷新即空态、每次只保留当前一次；侧栏「删除当前测试数据」可清空内存结果与验证审计日志，需要留档就点导出。
+
+## CI
+
+仓库自带 [.github/workflows/ci.yml](.github/workflows/ci.yml)：Python 3.10–3.13 单测矩阵 + demo 扫描结果上传 SARIF 到 Code Scanning（脱敏）。门禁用法 `--fail-on critical` 返回退出码 2，见手册 7.1。
 
 ## 其他
 

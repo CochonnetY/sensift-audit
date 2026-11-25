@@ -1,0 +1,60 @@
+name: senscan CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unittest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e .
+      - name: Compile check
+        run: python -m compileall -q senscan tests
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -q
+      - name: CLI smoke (no report written)
+        run: python -m senscan demo --fail-on none --no-report -q
+
+  sarif:
+    name: SARIF -> Code Scanning
+    runs-on: ubuntu-latest
+    # fork 的 PR 拿不到 security-events: write，跳过上传避免整条流水线变红
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+      # demo 是合成数据，但含形似真实凭据的字面量；--redact 保证 SARIF 里
+      # 不出现明文（含 partialFingerprints），--fail-on none 让门禁不误红。
+      - name: Scan demo (redacted)
+        run: |
+          python -m senscan demo -o senscan-ci -f sarif --redact --fail-on none -q
+          mv senscan-ci/*.sarif senscan-ci/result.sarif
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: senscan-ci/result.sarif
+          category: senscan-demo

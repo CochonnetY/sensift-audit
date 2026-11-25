@@ -10,7 +10,7 @@
 | 能做 | 不能做 |
 |---|---|
 | 从日志、配置、埋点 JSON、固件解压产物中提取凭据与设备标识 | 判断某条数据是否构成"违法处理" |
-| 从 pcap 中提取**明文** HTTP 的 URL / Header / Body | 解密 TLS 流量正文 |
+| 从 pcap / pcapng / 蓝牙 HCI 日志中提取**明文**载荷（HTTP、TCP、BLE ATT） | 解密 TLS 流量正文 |
 | 拆开 APK / JAR / IPA / Office / zip / tar / gz / SQLite 再扫里面的内容 | 反编译 dex 还原 Java 源码；只抽字符串 |
 | 给出置信度、风险等级、文件与行列定位、上下文片段 | 保证 100% 召回 |
 | 导出 CSV 交评审、SARIF 进 CI、HTML 给汇报 | 替代人工复核 |
@@ -30,7 +30,9 @@ pip install -e .
 tshark -v
 ```
 
-要求 Python 3.10+。pcap 解析会自动查找 `tshark`：先查 `PATH`，再查 Wireshark 常见安装路径。找不到时 pcap 文件会被跳过并在"跳过原因"里注明，不会中断扫描。
+要求 Python 3.10+。抓包解析会自动查找 `tshark`：先查 `PATH`，再查 Wireshark 常见安装路径。找不到时抓包文件会被跳过并在"跳过原因"里注明，不会中断扫描。
+
+支持 `.pcap`、`.pcapng` 和蓝牙 HCI 日志（btsnoop，如 Android 的 `btsnoop_hci.log`），三者走同一条 tshark 通道。**CLI 默认开启**（`--no-pcap` 关闭）；**工作台默认关闭**，须显式勾选「解析抓包 (Wireshark)」才解析，未勾选时抓包文件全部跳过并在诊断面板列出。
 
 ---
 
@@ -55,17 +57,18 @@ senscan ./app-logs -o reports
 
 ```bash
 senscan capture.pcap -o reports
+senscan btsnoop_hci.log -o reports     # 蓝牙 HCI 日志，同一条通道
 ```
 
 报告里的「位置」是**帧号**，拿这个号直接去 Wireshark 里 `frame.number == 42` 就能定位到原始包。
 
-注意：**只有明文 HTTP 能扫到内容。** 如果输出为 0，先用 tshark 确认抓包里到底有没有明文：
+注意：**只有明文载荷能扫到内容**（HTTP、TCP payload、BLE ATT 写入值等）。工作台里要先勾上「解析抓包 (Wireshark)」，否则抓包文件会被跳过。如果输出为 0，先用 tshark 确认抓包里到底有没有明文：
 
 ```bash
 tshark -r capture.pcap -Y "http.request" -T fields -e frame.number -e http.host | head
 ```
 
-一条都没有，说明流量是加密的，这不是工具的问题，见第八节。
+一条都没有，说明流量是加密的，这不是工具的问题，见第八节。蓝牙配网日志里常见的 `"psk":"..."`（Wi-Fi 明文口令）由 `wifi-psk` 规则命中。
 
 ### 场景 3：接进 CI
 
@@ -108,7 +111,7 @@ senscan ./release/app-release.apk -o out --verify-local
 | `--fail-on` | `high` | 触发退出码 2 的最低等级：`critical/high/medium/low/none` |
 | `--redact` | 关 | 报告中的值与上下文脱敏 |
 | `--include-binary` | 关 | 不跳过二进制文件（固件场景慎用，噪声极大） |
-| `--no-pcap` | 关 | 关闭 pcap 解析通道 |
+| `--no-pcap` | 关 | 关闭抓包解析通道（pcap / pcapng / 蓝牙 HCI）；CLI 默认开启 |
 | `--no-container` | 关 | 关闭容器解包通道（APK/JAR/IPA/Office/zip/tar/gz/SQLite） |
 | `--max-file-mb` | `512` | 单文件上限，超出则按行分块流式处理 |
 | `--top` | `20` | 控制台最多展示条数 |
@@ -258,6 +261,8 @@ senscan ./logs -w wl/baseline.txt     # 团队共识的安全项
 
 ### 7.1 CI 门禁
 
+仓库自带 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)：Python 3.10–3.13 全量单测、编译检查、CLI 冒烟，外加一条把 demo 扫描结果以 SARIF 上传到 GitHub Code Scanning 的示例。直接 fork 即可用，门禁部分按需改成扫自己的产物：
+
 ```yaml
 - name: 敏感数据审计
   run: |
@@ -272,6 +277,8 @@ senscan ./logs -w wl/baseline.txt     # 团队共识的安全项
 
 **建议入门用 `critical` 而不是 `high`。** 一开始就把门禁设太严，流水线天天红，最后所有人都会加 `|| true`，等于没有门禁。等基线稳定再收紧。
 
+上传 SARIF 时务必加 `--redact`：报告默认含明文凭据，SARIF 的 `partialFingerprints` 在脱敏模式下改用值哈希，既能跨次去重又不会把凭据送进 Code Scanning。fork 的 PR 拿不到 `security-events: write`，示例里已跳过上传步骤。
+
 ### 7.2 固件构建
 
 在镜像打包前扫构建产物里的日志与配置：
@@ -284,7 +291,7 @@ senscan ./rootfs/etc ./rootfs/var/log -o reports --fail-on critical --format jso
 
 ### 7.3 定时巡检
 
-用系统计划任务每天扫一次日志目录，报告带日期落盘，只对新出现的项告警（P2 会提供 `--diff`，当前可自行比对两次 JSON）。
+用系统计划任务每天扫一次日志目录，报告带日期落盘。想只对新出现的项告警，目前可自行比对两次 JSON 的 `source + rule_id + value`（后续可加 `--baseline` 输出「新增 / 仍在 / 已修复」三态）。
 
 ---
 
@@ -319,7 +326,7 @@ senscan ./rootfs/etc ./rootfs/var/log -o reports --fail-on critical --format jso
 3. 确认数据载体：被 `.gitignore` 之外的因素漏掉的文件？编码问题？
 4. 该实体类型可能不在规则表里，见第九节
 
-### pcap 扫不到内容
+### pcap / HCI 扫不到内容
 
 依次确认：
 
@@ -330,11 +337,16 @@ tshark -v
 # 2. 抓包里有没有明文 HTTP
 tshark -r x.pcap -Y "http" -T fields -e frame.number | head
 
-# 3. 是不是只在 TLS 里
+# 3. 蓝牙日志有没有 ATT 写入值（BLE 配网）
+tshark -r btsnoop_hci.log -Y "btatt" -T fields -e frame.number -e btatt.value | head
+
+# 4. 是不是只在 TLS 里
 tshark -r x.pcap -Y "tls.handshake" -T fields -e tls.handshake.extensions_server_name | head
 ```
 
-第 2 条有输出但 senscan 没命中 → 规则覆盖问题；第 2 条没输出、第 3 条有输出 → 流量全加密，正常。
+第 2/3 条有输出但 senscan 没命中 → 先看工作台是否勾了「解析抓包 (Wireshark)」；勾了仍为 0 则是规则覆盖问题（键名不在规则表里）。第 2/3 条没输出、第 4 条有输出 → 流量全加密，正常。
+
+工作台诊断面板底部有「后端版本 · PID · 启动时间」；出现"页面有勾选项但抓包仍被当成二进制跳过"，通常是后端进程早于新代码启动，重启工作台即可。
 
 ### 编码问题
 
@@ -411,13 +423,16 @@ python -m unittest discover -s tests
 
 | 载体 | 支持 | 说明 |
 |---|---|---|
-| 日志 / 配置 / 文本 | ✅ | 自动识别 UTF-8 / GB18030 / UTF-16 |
+| 日志 / 配置 / 文本 | ✅ | 自动识别 UTF-8 / GB18030 / UTF-16；非二进制即扫，不限扩展名 |
 | 埋点 JSON | ✅ | 支持 `"key": "value"` 与 `key=value` 两种写法 |
-| pcap / pcapng | ✅ 明文 HTTP | 需 tshark；TLS 正文不可见 |
-| 固件解压产物 | ✅ 文本部分 | 二进制默认跳过 |
-| 压缩包（zip/tar） | ❌ | 先解压 |
-| 数据库 / 对象存储 | ❌ | 先导出 |
+| pcap / pcapng / 蓝牙 HCI（btsnoop） | ✅ 明文字段 | 需 tshark；HTTP / TCP payload / BLE ATT；TLS 正文不可见。工作台须显式勾选 |
+| APK / JAR / IPA | ✅ | DEX 字符串池、`lib/**/*.so`、`resources.arsc` 抽可打印串；不做 dex 反编译 / 脱壳 |
+| Office（docx / xlsx / pptx） | ✅ | 取正文 XML；不含宏 / VBA |
+| 压缩包（zip / tar / gz） | ✅ | 递归两层，带条目体积与总量护栏；加密包无密码时无法解 |
+| SQLite（.db / .sqlite） | ✅ | 逐表逐列导出 `表.列=值`；其他数据库与对象存储仍需先导出 |
+| 固件解压产物 / 二进制 | ✅ 文本部分 | 二进制默认跳过；`--include-binary` 可强开（噪声大） |
 | 嵌入式 / IoT 设备日志（三元组、密钥分区 dump） | ✅ | 支持缩写字段名、串口硬折行、无 PEM 头的 DER base64 |
+| PDF / Git 历史 / Docker 镜像层 | ❌ | 当前不支持，需先自行抽取 |
 | 凭据存活验证（离线） | ✅ | 默认关闭，`--verify-local` 开启；不联网 |
 | 凭据存活验证（在线） | ⚠️ 部分 | 仅只读端点、须显式授权；webhook / 需签名 API 不支持 |
 
@@ -432,18 +447,20 @@ python -m senscan ui --port 9000 --no-browser
 python -m senscan ui --audit D:/audit/verify.jsonl
 ```
 
-**页面结构**：左侧配置（路径、浏览、置信度、抓包/二进制/脱敏开关、白名单、验证、导出），右侧四个页签。
+**页面结构**：左侧配置（路径、浏览、置信度、容器/抓包/二进制/脱敏开关、白名单、验证、导出、删除当前测试数据），右侧四个页签。
 
 | 页签 | 内容 |
 |---|---|
 | 概览 | 4 个 KPI、风险横条、类别环形图、P0/P1/P2 批次、降噪漏斗、验证摘要、热点文件、扩散面 |
-| 明细 | 按风险/批次/类别/实体/存活筛选 + 搜索 + 5 列可排序 + 分页（每页 20）；点行开抽屉看命中值、判定依据、建议、验证结论。「隐藏值」同时作用于列表、概览扩散面、详情与复制，不影响导出与原始数据 |
-| 规则 | 83 条规则可搜索，含风险、来源、说明 |
+| 明细 | 按风险/批次/类别/实体/存活筛选 + 搜索 + 5 列可排序 + 分页（每页 20）；点行开抽屉看命中值、判定依据、建议、验证结论。详情「原文」里命中值用黄色高亮标出，长值分段省略。「隐藏值」同时作用于列表、概览扩散面、详情与复制，不影响导出与原始数据 |
+| 规则 | 84 条规则可搜索，含风险、来源、说明 |
 | 审计 | JSONL 日志（时间/端点/实体/指纹/结果/HTTP/耗时/Host）与端点目录 |
 
-打开页面会恢复本次进程内最近一次扫描结果；没有结果时点「运行示例」。扫描中显示 `已完成/总数` 文件进度，可点「停止」中止；进度查询超过 10 分钟自动停止轮询。目录浏览里点文件即把该文件加入目标，不必手打路径。
+**不保存扫描记录**：刷新或重开页面都是干净空态，不会恢复上次结果；每次新扫描只保留当前一次，不累积历史。侧栏「删除当前测试数据」按钮可一键清空内存结果、取消运行中的任务并删除在线验证审计日志（**不会删除已导出的报告文件**）。需要留档就主动点 HTML / CSV / SARIF / JSON 导出按钮。
 
-**安全边界**：只监听 `127.0.0.1`；每个启动进程生成一次性 token 注入页面，所有 `/api/*` 请求必须携带；Host 头白名单挡 DNS rebinding；不设置任何 CORS 头，CSP 只允许本页内联脚本与同源连接；扫描结果保存在**进程内存**，只有点导出时才生成文件。服务停掉后界面数据即消失，需要留档请导出报告。
+扫描中显示 `已完成/总数` 文件进度，可点「停止」中止；进度查询超过 10 分钟自动停止轮询。目录浏览里点文件即把该文件加入目标，不必手打路径。「解析抓包 (Wireshark)」默认不勾，勾选后才解析 pcap / pcapng / 蓝牙 HCI；未勾选时诊断面板会列出被跳过的抓包文件。
+
+**安全边界**：只监听 `127.0.0.1`；每个启动进程生成一次性 token 注入页面，所有 `/api/*` 请求必须携带；Host 头白名单挡 DNS rebinding；不设置任何 CORS 头，CSP 只允许本页内联脚本与同源连接；扫描结果只在**进程内存**，服务停掉后界面数据即消失。`/api/ping` 返回版本、PID、启动时间和能力指纹，用于识别「页面新版 / 后端旧版」——改完 `webui.py` 必须重启进程，前端页面改完刷新浏览器即可。
 
 ---
 
