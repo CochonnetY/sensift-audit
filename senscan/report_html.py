@@ -202,14 +202,12 @@ def _compliance_section(result: ScanResult) -> str:
     sm = cp["summary"]
     out = [
         '<h2>合规映射（线索归类 · 非法律结论）</h2>',
-        f'<div class="cnotice"><b>效力层级</b>：{_e(cp["level_note"])}<br>'
+        f'<div class="cnotice"><b>口径与效力</b>：{_e(cp["level_note"])} '
         f'{_e(cp["version_note"])}</div>',
-        '<div class="cnotice warnc"><b>口径差异提醒</b>：'
-        'PIPL 第 28 条法定「敏感个人信息」列举为生物识别、宗教信仰、特定身份、医疗健康、'
-        '金融账户、行踪轨迹及不满十四周岁未成年人信息；GB/T 35273-2020 附录 B 表 B.1 '
-        '「个人敏感信息」范围更宽，另含个人电话号码、邮箱地址及口令、系统账号等。'
-        '<b>两者不得直接等同</b>，本表对同一实体分别给出两套分类。'
-        '凭据类（API Key / 私钥 / 设备密钥）通常是组织资产，不硬套个人信息主体权利条款。</div>',
+        '<div class="cnotice warnc"><b>口径差异</b>：PIPL 第 28 条法定敏感个人信息列举为'
+        '生物识别、宗教信仰、特定身份、医疗健康、金融账户、行踪轨迹及不满十四周岁未成年人信息；'
+        'GB/T 35273-2020 附录 B 表 B.1 范围更宽，另含电话号码、邮箱及口令、系统账号。'
+        '<b>两者不得直接等同</b>；凭据类通常是组织资产，不硬套个人信息主体权利条款。</div>',
         '<div class="ckpis">',
         f'<div class="ckpi"><div class="n hot">{sm["pipl_sensitive_count"]}</div>'
         '<div class="l">法定敏感个人信息（PIPL 第 28 条）</div></div>',
@@ -268,9 +266,7 @@ def _compliance_section(result: ScanResult) -> str:
     for g in COMP.GAPS:
         out.append(f'<li>{_e(g)}</li>')
     out.append('</ul></div>')
-    out.append(
-        f'<p class="cnotice">{_e(cp["disclaimer"])}<br>{_e(cp["notice"])}</p>'
-    )
+    out.append(f'<p class="cnotice">{_e(cp["disclaimer"])}</p>')
     return "\n".join(out)
 
 

@@ -197,6 +197,57 @@ tr:last-child td{border-bottom:0}
   font-size:12px;color:var(--muted)}
 .pager .btn{padding:4px 10px;font-size:11.5px}
 
+/* ---- 合规映射：收敛冗长提示，按信息层级折叠 ---- */
+.compnote{background:#fff;border:1px solid var(--line);border-radius:10px;
+  margin-bottom:14px;box-shadow:var(--shadow);overflow:hidden}
+.compnote>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;
+  padding:11px 15px;font-size:12.5px;color:var(--ink2)}
+.compnote>summary::-webkit-details-marker{display:none}
+.compnote>summary:hover{background:#fafbfd}
+.cn-dot{width:7px;height:7px;border-radius:50%;background:var(--orange);flex:none}
+.cn-brief{color:var(--muted);font-size:11.5px;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cn-more{color:var(--primary);font-size:11.5px;flex:none}
+.compnote[open] .cn-more{color:var(--faint)}
+.cn-body{border-top:1px solid var(--line2);padding:11px 15px 13px;display:grid;gap:8px;
+  font-size:11.5px;line-height:1.65;color:var(--ink2);background:#fcfdff}
+.cn-body p{margin:0}
+.cmp-basis{min-width:250px}
+.cmp-txt{overflow-wrap:anywhere;line-height:1.6}
+.cmp-refs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.refchip{font-size:10.5px;background:#f1f4fa;border:1px solid var(--line2);color:var(--ink2);
+  border-radius:5px;padding:1px 6px;line-height:1.5;overflow-wrap:anywhere}
+.cmp-more{margin-top:7px;font-size:11px}
+.cmp-more>summary{cursor:pointer;color:var(--primary);list-style:none}
+.cmp-more>summary::-webkit-details-marker{display:none}
+.cmp-more[open]>summary{color:var(--faint)}
+.cmp-more .body{padding:7px 0 2px;display:grid;gap:6px;color:var(--muted);line-height:1.6}
+.cmp-warn{color:#a16207}
+.lawfilter{width:100%;padding:7px 10px;font-size:12px;border:1px solid var(--line);
+  border-radius:8px;margin-bottom:10px;outline:none}
+.lawfilter:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-soft)}
+.lawlist{max-height:300px;overflow:auto;font-size:11.5px;line-height:1.6;padding-right:4px}
+.lawlist::-webkit-scrollbar{width:6px}
+.lawlist::-webkit-scrollbar-thumb{background:#d8dfea;border-radius:3px}
+.lawitem{border-bottom:1px solid var(--line2);padding:7px 0}
+.lawitem:last-child{border-bottom:0}
+.lawitem>summary{cursor:pointer;list-style:none;display:flex;align-items:baseline;gap:6px;
+  flex-wrap:wrap;color:var(--ink2)}
+.lawitem>summary::-webkit-details-marker{display:none}
+.lawitem>summary b{font-weight:600}
+.lawtag{font-size:10px;color:var(--muted);background:#f1f3f7;border-radius:4px;padding:1px 6px;flex:none}
+.lawtag.law{background:var(--red-soft);color:var(--red)}
+.lawtag.std{background:var(--blue-soft);color:#0a6da3}
+.lawtag.rule{background:var(--orange-soft);color:#a5640f}
+.lawbody{padding:6px 0 2px 12px;color:var(--muted);border-left:2px solid var(--line);margin-left:2px}
+.gaplist{display:grid;gap:6px}
+.gapitem{display:flex;gap:9px;align-items:baseline;font-size:12px;color:var(--ink2);
+  background:#fafbfd;border:1px solid var(--line2);border-radius:7px;padding:7px 10px;line-height:1.5}
+.gapn{font:700 10.5px ui-monospace,Consolas,monospace;color:var(--faint);flex:none}
+.compfoot{margin-top:14px;padding-top:11px;border-top:1px solid var(--line2);
+  font-size:11px;color:var(--faint);line-height:1.6}
+@media(max-width:1100px){.panels{grid-template-columns:1fr}}
+
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(520px,94vw);background:#fff;z-index:60;
   box-shadow:-12px 0 40px rgba(18,30,55,.16);display:flex;flex-direction:column;animation:in .2s ease-out}
 @keyframes in{from{transform:translateX(28px);opacity:.5}to{transform:none;opacity:1}}
@@ -417,27 +468,36 @@ tr:last-child td{border-bottom:0}
 
     <section class="pane hide" id="pane-compliance">
       <div id="compEmpty" class="empty"><div class="ico">§</div><h2>暂无结果</h2>
-        <p>完成一次扫描后，这里按 PIPL / GB/T 35273 口径给出数据分类、法条依据与 PIA 触发提示。</p></div>
+        <p>扫描后这里给出数据分类、法条依据与 PIA 触发提示。</p></div>
       <div id="compBody" class="hide">
-        <div class="notice" style="margin-bottom:14px;line-height:1.7">
-          <b>口径提醒</b>：PIPL 第 28 条法定「敏感个人信息」与 GB/T 35273-2020 附录 B 表 B.1
-          「个人敏感信息」范围不同，后者更宽（含个人电话号码、邮箱及口令）。二者不得直接等同；
-          凭据类通常是组织资产，不硬套个人信息主体权利条款。
-          <span id="compLevel" class="tiny dim" style="display:block;margin-top:6px"></span></div>
+        <details class="compnote" id="compNote">
+          <summary>
+            <span class="cn-dot"></span><b>口径与效力</b>
+            <span class="cn-brief">法定敏感 ≠ 国标敏感 · 凭据不硬套个保法 · 以生效版本为准</span>
+            <span class="cn-more">展开说明</span>
+          </summary>
+          <div class="cn-body">
+            <p>PIPL 第 28 条法定「敏感个人信息」与 GB/T 35273-2020 附录 B 表 B.1「个人敏感信息」范围不同，后者更宽（含电话号码、邮箱及口令），二者不得直接等同；凭据类通常是组织资产，不硬套个人信息主体权利条款。</p>
+            <p id="compLevel" class="dim"></p>
+            <p id="compVersion" class="dim"></p>
+          </div>
+        </details>
         <div class="kpis" id="compKpis"></div>
         <div class="panel" style="margin-bottom:14px"><h4>实体分类与法条依据 <span id="compMeta"></span></h4>
           <div class="tablebox"><table><thead><tr>
             <th>实体 / 命中</th><th>数据分类</th><th>PIPL 口径</th><th>GB/T 35273 口径</th>
-            <th>PIA 触发</th><th>依据与适用条款</th>
+            <th>PIA 触发</th><th>归类依据</th>
           </tr></thead><tbody id="compRows"></tbody></table></div></div>
         <div class="panel hide" id="compBaselinePanel" style="margin-bottom:14px">
           <h4>增量对比 <span id="compBaselineMeta"></span></h4><div id="compBaseline"></div></div>
         <div class="panels">
-          <div class="panel"><h4>待补充信息缺口</h4><ul id="compGaps" style="padding-left:18px;font-size:12.5px;line-height:1.7"></ul></div>
+          <div class="panel"><h4>待补充信息缺口 <span>须人工确认</span></h4>
+            <div class="gaplist" id="compGaps"></div></div>
           <div class="panel"><h4>法条目录 <span class="tiny dim" id="compLawCount"></span></h4>
-            <div id="compLaws" style="max-height:280px;overflow:auto;font-size:11.5px;line-height:1.6"></div></div>
+            <input type="text" id="compLawFilter" class="lawfilter" placeholder="过滤法条 / 标准 / 条号…" spellcheck="false">
+            <div id="compLaws" class="lawlist"></div></div>
         </div>
-        <div class="notice red" style="margin-top:14px;line-height:1.7" id="compDisclaimer"></div>
+        <div class="compfoot" id="compDisclaimer"></div>
       </div>
     </section>
 
@@ -751,7 +811,8 @@ function renderCompliance(d){
   $("compBody").classList.toggle("hide",!c);
   if(!c) return;
   const s=c.summary||{};
-  $("compLevel").textContent=c.level_note+"　"+c.version_note;
+  $("compLevel").textContent=c.level_note||"";
+  $("compVersion").textContent=c.version_note||"";
   $("compKpis").innerHTML=[
     ["法定敏感个人信息",s.pipl_sensitive_count||0,"red","PIPL 第 28 条"],
     ["国标敏感（口径更宽）",s.gb_sensitive_count||0,"orange","GB/T 35273 附录 B"],
@@ -762,23 +823,40 @@ function renderCompliance(d){
   const ent=Object.entries(c.by_entity||{}), counts=(d.summary||{}).by_entity||{};
   ent.sort((a,b2)=>(counts[b2[0]]||0)-(counts[a[0]]||0));
   $("compMeta").textContent=`${ent.length} 类实体 · ${s.total||0} 条命中`;
-  $("compRows").innerHTML=ent.map(([k,v])=>`<tr>
-    <td class="mono">${esc(k)}<br><span class="tiny dim">${counts[k]||0} 条</span></td>
-    <td><span class="badge ${C_PILL[v.data_category]||""}">${esc(v.data_category_label)}</span></td>
-    <td>${esc(v.pipl_class)}</td><td>${esc(v.gb35273_class)}</td>
-    <td><span class="badge ${P_PILL[v.pia_trigger]||""}">${esc(v.pia_label)}</span></td>
-    <td style="min-width:280px">${esc(v.basis)}
-      <div class="tiny dim" style="margin-top:4px">${esc((v.references||[]).join("；")||"需人工判定")}</div>
-      ${v.caveat?`<div class="tiny" style="color:#a16207;margin-top:4px">⚠ ${esc(v.caveat)}</div>`:""}
-      ${v.action?`<div class="tiny dim" style="margin-top:4px">处置：${esc(v.action)}</div>`:""}
-    </td></tr>`).join("")||`<tr><td colspan="6" class="dim">无命中</td></tr>`;
-  $("compGaps").innerHTML=(c.gaps||[]).map(g=>`<li>${esc(g)}</li>`).join("");
+  $("compRows").innerHTML=ent.map(([k,v])=>{
+    const refs=v.references||[];
+    const chips=refs.length
+      ? `<div class="cmp-refs">${refs.map(r=>`<span class="refchip">${esc(r)}</span>`).join("")}</div>`
+      : `<div class="tiny dim">需人工判定，工具不推定法条</div>`;
+    const more=(refs.length||v.caveat||v.action)
+      ? `<details class="cmp-more"><summary>适用条款与处置 · ${refs.length} 条</summary>
+          <div class="body">${chips}
+            ${v.caveat?`<div class="cmp-warn">⚠ ${esc(v.caveat)}</div>`:""}
+            ${v.action?`<div>处置：${esc(v.action)}</div>`:""}
+          </div></details>` : "";
+    return `<tr>
+      <td class="mono">${esc(k)}<br><span class="tiny dim">${counts[k]||0} 条</span></td>
+      <td><span class="badge ${C_PILL[v.data_category]||""}">${esc(v.data_category_label)}</span></td>
+      <td>${esc(v.pipl_class)}</td><td>${esc(v.gb35273_class)}</td>
+      <td><span class="badge ${P_PILL[v.pia_trigger]||""}">${esc(v.pia_label)}</span></td>
+      <td class="cmp-basis"><div class="cmp-txt">${esc(v.basis)}</div>${more}</td></tr>`;
+  }).join("")||`<tr><td colspan="6" class="dim">无命中</td></tr>`;
+  $("compGaps").innerHTML=(c.gaps||[]).map((g,i)=>
+    `<div class="gapitem"><span class="gapn">${String(i+1).padStart(2,"0")}</span><span>${esc(g)}</span></div>`).join("");
   const laws=c.legal_catalog||[];
   $("compLawCount").textContent=`${laws.length} 条`;
-  $("compLaws").innerHTML=laws.map(r=>`<div style="margin:5px 0;padding-bottom:5px;border-bottom:1px solid var(--line2)">
-    <b>${esc(r.label)}</b> · ${esc(r.title)} <span class="tiny dim">[${esc(r.level)} · ${esc(r.verification)}]</span>
-    <div class="tiny dim" style="margin-top:3px">${esc(r.gist)}</div></div>`).join("");
-  $("compDisclaimer").innerHTML=esc(c.disclaimer)+"<br>"+esc(c.notice||"");
+  const lv=r=>/法律/.test(r.level||"")?"law":(/标准/.test(r.level||"")?"std":"rule");
+  $("compLaws").innerHTML=laws.map(r=>`<details class="lawitem" data-k="${esc((r.label+" "+r.title+" "+r.law+" "+r.article).toLowerCase())}">
+    <summary><b>${esc(r.label)}</b> · ${esc(r.title)}<span class="lawtag ${lv(r)}">${esc(r.level)}</span></summary>
+    <div class="lawbody">${esc(r.gist)}<br><span class="tiny dim">${esc(r.verification)} · ${esc(r.source||"")}</span></div>
+  </details>`).join("");
+  $("compLawFilter").value="";
+  $("compLawFilter").oninput=()=>{
+    const q=$("compLawFilter").value.trim().toLowerCase();
+    document.querySelectorAll("#compLaws .lawitem").forEach(el=>
+      el.classList.toggle("hide",!!q && !(el.dataset.k||"").includes(q)));
+  };
+  $("compDisclaimer").textContent=c.disclaimer||"";
   const hasB=!!(b&&b.enabled);
   $("compBaselinePanel").classList.toggle("hide",!hasB);
   if(hasB){
